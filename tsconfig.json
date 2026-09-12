@@ -25,18 +25,22 @@
     ],
     "paths": {
       "@/lib/*": [
+        "./packages/shared-lib/src/lib/*",
         "../../packages/shared-lib/src/lib/*"
       ],
       "@/types": [
+        "./packages/shared-lib/src/types",
         "../../packages/shared-lib/src/types"
       ],
       "@/types/*": [
+        "./packages/shared-lib/src/types/*",
         "../../packages/shared-lib/src/types/*"
       ],
       "@/*": [
         "./src/*"
       ],
       "@volo/shared-types": [
+        "./packages/shared-types/src/index.ts",
         "../../packages/shared-types/src/index.ts"
       ]
     }
@@ -46,12 +50,12 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    "**/*.mts",
+    ".next/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
-    "mobile",
-    "packages"
+    ".next/dev",
+    "mobile"
   ]
 }
