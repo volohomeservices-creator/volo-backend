@@ -1,6 +1,16 @@
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
+import Module from 'module';
+
+// Intercept server-only in pure Node.js so shared-lib imports succeed unconditionally
+const originalRequire = (Module as any).prototype.require;
+(Module as any).prototype.require = function (id: string, ...args: any[]) {
+  if (id === 'server-only') {
+    return {};
+  }
+  return originalRequire.apply(this, [id, ...args]);
+};
 
 // Load local and workspace environment variables before importing anything else
 dotenv.config({ path: path.resolve(__dirname, '../.env.local') });

@@ -50,6 +50,7 @@ module.exports = __toCommonJS(server_exports);
 var import_fs2 = __toESM(require("fs"));
 var import_path3 = __toESM(require("path"));
 var import_dotenv2 = __toESM(require("dotenv"));
+var import_module = __toESM(require("module"));
 var import_express2 = __toESM(require("express"));
 var import_cors = __toESM(require("cors"));
 var import_helmet = __toESM(require("helmet"));
@@ -255,6 +256,7 @@ async function loadApiRoutes(apiDir) {
   const rawRoutes = discoverRoutes(apiDir, apiDir);
   const sortedRoutes = sortRoutes(rawRoutes);
   let registeredCount = 0;
+  const errors = [];
   for (const route of sortedRoutes) {
     try {
       const fileUrl = (0, import_url.pathToFileURL)(route.filePath).href;
@@ -263,9 +265,10 @@ async function loadApiRoutes(apiDir) {
       registeredCount++;
     } catch (err) {
       console.error(`\u274C Failed to register route ${route.expressPath} (${route.filePath}):`, err);
+      errors.push({ path: route.expressPath, error: (err == null ? void 0 : err.message) || String(err) });
     }
   }
-  return { router, count: registeredCount };
+  return { router, count: registeredCount, discovered: rawRoutes.length, errors };
 }
 
 // src/env.ts
@@ -308,6 +311,13 @@ if (!parsedEnv.success) {
 var env = parsedEnv.success ? parsedEnv.data : process.env;
 
 // src/server.ts
+var originalRequire = import_module.default.prototype.require;
+import_module.default.prototype.require = function(id, ...args) {
+  if (id === "server-only") {
+    return {};
+  }
+  return originalRequire.apply(this, [id, ...args]);
+};
 import_dotenv2.default.config({ path: import_path3.default.resolve(__dirname, "../.env.local") });
 import_dotenv2.default.config({ path: import_path3.default.resolve(__dirname, "../.env") });
 import_dotenv2.default.config({ path: import_path3.default.resolve(__dirname, "../../../.env.local") });
@@ -412,9 +422,9 @@ async function bootstrap() {
   ];
   const apiDir = candidateDirs.find((d) => import_fs2.default.existsSync(d)) || candidateDirs[0];
   console.log(`[Init] Scanning API routes in: ${apiDir}`);
-  const { router, count } = await loadApiRoutes(apiDir);
+  const { router, count, discovered, errors } = await loadApiRoutes(apiDir);
   app.use(router);
-  console.log(`[Init] Successfully loaded ${count} API routes.`);
+  console.log(`[Init] Successfully loaded ${count}/${discovered} API routes.`);
   app.use("/api", (req, res) => {
     res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl}` });
   });
@@ -424,6 +434,9 @@ async function bootstrap() {
       status: "UP",
       port: PORT,
       loadedRoutes: count,
+      discoveredRoutes: discovered,
+      failedRoutesCount: errors.length,
+      routeErrors: errors.slice(0, 10),
       apiDir,
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
     });
