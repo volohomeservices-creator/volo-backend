@@ -4,6 +4,40 @@
  */
 
 export class NextResponse extends Response {
+  public cookies: {
+    set: (name: string, value: string, options?: any) => void;
+    delete: (name: string) => void;
+    get: (name: string) => { name: string; value: string } | undefined;
+  };
+
+  constructor(body?: BodyInit | null, init?: ResponseInit) {
+    super(body, init);
+    const self = this;
+    this.cookies = {
+      set: (name: string, value: string, options: any = {}) => {
+        let cookieStr = `${encodeURIComponent(name)}=${encodeURIComponent(value)}`;
+        if (options.maxAge !== undefined) cookieStr += `; Max-Age=${options.maxAge}`;
+        if (options.expires) cookieStr += `; Expires=${new Date(options.expires).toUTCString()}`;
+        if (options.path) cookieStr += `; Path=${options.path}`;
+        else cookieStr += '; Path=/';
+        if (options.domain) cookieStr += `; Domain=${options.domain}`;
+        if (options.secure) cookieStr += '; Secure';
+        if (options.httpOnly) cookieStr += '; HttpOnly';
+        if (options.sameSite) cookieStr += `; SameSite=${options.sameSite}`;
+        self.headers.append('Set-Cookie', cookieStr);
+      },
+      delete: (name: string) => {
+        self.headers.append(
+          'Set-Cookie',
+          `${encodeURIComponent(name)}=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0`
+        );
+      },
+      get: (_name: string) => {
+        return undefined;
+      },
+    };
+  }
+
   static json(data: any, init?: ResponseInit): NextResponse {
     const headers = new Headers(init?.headers);
     if (!headers.has('Content-Type')) {

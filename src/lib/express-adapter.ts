@@ -60,10 +60,25 @@ export async function sendWebResponse(webRes: Response, res: ExpressRes): Promis
 
   webRes.headers.forEach((value, key) => {
     // Prevent setting duplicate or conflicting content-length if gzip/transfer-encoding is used
-    if (key.toLowerCase() !== 'content-length') {
+    const lower = key.toLowerCase();
+    if (lower !== 'content-length' && lower !== 'set-cookie') {
       res.setHeader(key, value);
     }
   });
+
+  // Accurately forward multiple Set-Cookie headers
+  const getSetCookie = (webRes.headers as any).getSetCookie;
+  if (typeof getSetCookie === 'function') {
+    const cookies = getSetCookie.call(webRes.headers);
+    if (Array.isArray(cookies) && cookies.length > 0) {
+      res.setHeader('Set-Cookie', cookies);
+    }
+  } else {
+    const singleCookie = webRes.headers.get('set-cookie');
+    if (singleCookie) {
+      res.setHeader('Set-Cookie', singleCookie);
+    }
+  }
 
   const arrayBuffer = await webRes.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
