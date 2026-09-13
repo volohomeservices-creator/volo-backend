@@ -138,7 +138,13 @@ app.use((req, res, next) => {
 
 // 7. Mount API Routes dynamically from src/app/api
 async function bootstrap() {
-  const apiDir = path.resolve(__dirname, 'app/api');
+  const candidateDirs = [
+    path.resolve(__dirname, 'app/api'),
+    path.resolve(__dirname, 'src/app/api'),
+    path.resolve(process.cwd(), 'dist/app/api'),
+    path.resolve(process.cwd(), 'src/app/api'),
+  ];
+  const apiDir = candidateDirs.find((d) => fs.existsSync(d)) || candidateDirs[0];
   console.log(`[Init] Scanning API routes in: ${apiDir}`);
 
   const { router, count } = await loadApiRoutes(apiDir);
@@ -156,6 +162,8 @@ async function bootstrap() {
       name: 'Volo Backend API',
       status: 'UP',
       port: PORT,
+      loadedRoutes: count,
+      apiDir,
       timestamp: new Date().toISOString(),
     });
   });

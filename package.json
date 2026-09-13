@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsup src/server.ts \"src/app/api/**/route.ts\" --format cjs --out-dir dist",
+    "prestart": "npm run build",
     "start": "node dist/server.js",
     "audit:apis": "tsx scripts/audit-apis.ts",
     "test": "vitest run",

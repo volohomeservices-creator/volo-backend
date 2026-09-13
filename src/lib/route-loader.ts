@@ -20,7 +20,7 @@ interface RouteEntry {
  *   src/app/api/admin/[...slug]            -> /api/admin/{*slug}
  */
 function toExpressPath(relativePath: string): { expressPath: string; isCatchAll: boolean; isDynamic: boolean } {
-  const segments = relativePath.split(path.sep).filter(Boolean);
+  const segments = relativePath.split(/[\\/]/).filter(Boolean);
   let isCatchAll = false;
   let isDynamic = false;
 
