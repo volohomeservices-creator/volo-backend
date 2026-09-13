@@ -102,12 +102,18 @@ function sortRoutes(routes: RouteEntry[]): RouteEntry[] {
 /**
  * Automatically mounts all route.ts files in src/app/api onto an Express router.
  */
-export async function loadApiRoutes(apiDir: string): Promise<{ router: Router; count: number }> {
+export async function loadApiRoutes(apiDir: string): Promise<{
+  router: Router;
+  count: number;
+  discovered: number;
+  errors: { path: string; error: string }[];
+}> {
   const router = Router();
   const rawRoutes = discoverRoutes(apiDir, apiDir);
   const sortedRoutes = sortRoutes(rawRoutes);
 
   let registeredCount = 0;
+  const errors: { path: string; error: string }[] = [];
 
   for (const route of sortedRoutes) {
     try {
@@ -116,10 +122,11 @@ export async function loadApiRoutes(apiDir: string): Promise<{ router: Router; c
       const routeModule = await import(fileUrl);
       router.all(route.expressPath, adaptRoute(routeModule));
       registeredCount++;
-    } catch (err) {
+    } catch (err: any) {
       console.error(`❌ Failed to register route ${route.expressPath} (${route.filePath}):`, err);
+      errors.push({ path: route.expressPath, error: err?.message || String(err) });
     }
   }
 
-  return { router, count: registeredCount };
+  return { router, count: registeredCount, discovered: rawRoutes.length, errors };
 }

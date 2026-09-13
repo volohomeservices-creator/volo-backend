@@ -148,9 +148,9 @@ async function bootstrap() {
   const apiDir = candidateDirs.find((d) => fs.existsSync(d)) || candidateDirs[0];
   console.log(`[Init] Scanning API routes in: ${apiDir}`);
 
-  const { router, count } = await loadApiRoutes(apiDir);
+  const { router, count, discovered, errors } = await loadApiRoutes(apiDir);
   app.use(router);
-  console.log(`[Init] Successfully loaded ${count} API routes.`);
+  console.log(`[Init] Successfully loaded ${count}/${discovered} API routes.`);
 
   // 404 handler for API routes
   app.use('/api', (req, res) => {
@@ -164,6 +164,9 @@ async function bootstrap() {
       status: 'UP',
       port: PORT,
       loadedRoutes: count,
+      discoveredRoutes: discovered,
+      failedRoutesCount: errors.length,
+      routeErrors: errors.slice(0, 10),
       apiDir,
       timestamp: new Date().toISOString(),
     });
