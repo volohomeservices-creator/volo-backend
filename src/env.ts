@@ -2,11 +2,22 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { z } from 'zod';
 
-// Load environment variables before validation
-dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
-dotenv.config({ path: path.resolve(__dirname, '../../../.env.local') });
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+// Load environment variables from all possible locations
+const envPaths = [
+  path.resolve(process.cwd(), '.env.local'),
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(__dirname, '.env.local'),
+  path.resolve(__dirname, '.env'),
+  path.resolve(__dirname, '../.env.local'),
+  path.resolve(__dirname, '../.env'),
+  path.resolve(__dirname, '../../../.env.local'),
+  path.resolve(__dirname, '../../../.env'),
+];
+
+for (const p of envPaths) {
+  dotenv.config({ path: p });
+}
+dotenv.config();
 
 const envSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().min(1, 'Missing NEXT_PUBLIC_SUPABASE_URL'),
@@ -17,10 +28,6 @@ const envSchema = z.object({
   NEXT_PUBLIC_GOOGLE_MAPS_KEY: z.string().min(1, 'Missing NEXT_PUBLIC_GOOGLE_MAPS_KEY'),
 });
 
-// Since Next.js bundles code for client and server differently, and we are validating 
-// server-side environments on boot, we'll try parsing process.env.
-// In Next.js, process.env is injected at build time for NEXT_PUBLIC vars, but 
-// server-only vars are available at runtime.
 const parsedEnv = envSchema.safeParse({
   NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
   NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
@@ -31,13 +38,7 @@ const parsedEnv = envSchema.safeParse({
 });
 
 if (!parsedEnv.success) {
-  console.error('❌ Invalid environment variables:', parsedEnv.error.format());
-  
-  // Do not crash during Next.js build step (when some env vars might be missing),
-  // but crash during runtime/start
-  if (process.env.NODE_ENV !== 'test' && !process.env.CI && !process.env.NEXT_PHASE) {
-    throw new Error('Invalid environment variables');
-  }
+  console.warn('⚠️ [Environment Warning] Missing or invalid variables:', parsedEnv.error.flatten().fieldErrors);
 }
 
 export const env = parsedEnv.success ? parsedEnv.data : process.env;

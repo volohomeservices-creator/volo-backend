@@ -2,7 +2,7 @@
   "name": "backend",
   "version": "0.1.0",
   "private": true,
-  "main": "dist/server.js",
+  "main": "server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsup src/server.ts \"src/app/api/**/route.ts\" --format cjs --out-dir dist",

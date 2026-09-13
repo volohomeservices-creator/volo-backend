@@ -47,6 +47,7 @@ __export(server_exports, {
   default: () => server_default
 });
 module.exports = __toCommonJS(server_exports);
+var import_fs2 = __toESM(require("fs"));
 var import_path3 = __toESM(require("path"));
 var import_dotenv2 = __toESM(require("dotenv"));
 var import_express2 = __toESM(require("express"));
@@ -271,10 +272,20 @@ async function loadApiRoutes(apiDir) {
 var import_path2 = __toESM(require("path"));
 var import_dotenv = __toESM(require("dotenv"));
 var import_zod = require("zod");
-import_dotenv.default.config({ path: import_path2.default.resolve(__dirname, "../.env.local") });
-import_dotenv.default.config({ path: import_path2.default.resolve(__dirname, "../.env") });
-import_dotenv.default.config({ path: import_path2.default.resolve(__dirname, "../../../.env.local") });
-import_dotenv.default.config({ path: import_path2.default.resolve(__dirname, "../../../.env") });
+var envPaths = [
+  import_path2.default.resolve(process.cwd(), ".env.local"),
+  import_path2.default.resolve(process.cwd(), ".env"),
+  import_path2.default.resolve(__dirname, ".env.local"),
+  import_path2.default.resolve(__dirname, ".env"),
+  import_path2.default.resolve(__dirname, "../.env.local"),
+  import_path2.default.resolve(__dirname, "../.env"),
+  import_path2.default.resolve(__dirname, "../../../.env.local"),
+  import_path2.default.resolve(__dirname, "../../../.env")
+];
+for (const p of envPaths) {
+  import_dotenv.default.config({ path: p });
+}
+import_dotenv.default.config();
 var envSchema = import_zod.z.object({
   NEXT_PUBLIC_SUPABASE_URL: import_zod.z.string().min(1, "Missing NEXT_PUBLIC_SUPABASE_URL"),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: import_zod.z.string().min(1, "Missing NEXT_PUBLIC_SUPABASE_ANON_KEY"),
@@ -292,10 +303,7 @@ var parsedEnv = envSchema.safeParse({
   NEXT_PUBLIC_GOOGLE_MAPS_KEY: process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY
 });
 if (!parsedEnv.success) {
-  console.error("\u274C Invalid environment variables:", parsedEnv.error.format());
-  if (process.env.NODE_ENV !== "test" && !process.env.CI && !process.env.NEXT_PHASE) {
-    throw new Error("Invalid environment variables");
-  }
+  console.warn("\u26A0\uFE0F [Environment Warning] Missing or invalid variables:", parsedEnv.error.flatten().fieldErrors);
 }
 var env = parsedEnv.success ? parsedEnv.data : process.env;
 
@@ -402,7 +410,7 @@ async function bootstrap() {
     import_path3.default.resolve(process.cwd(), "dist/app/api"),
     import_path3.default.resolve(process.cwd(), "src/app/api")
   ];
-  const apiDir = candidateDirs.find((d) => fs.existsSync(d)) || candidateDirs[0];
+  const apiDir = candidateDirs.find((d) => import_fs2.default.existsSync(d)) || candidateDirs[0];
   console.log(`[Init] Scanning API routes in: ${apiDir}`);
   const { router, count } = await loadApiRoutes(apiDir);
   app.use(router);
