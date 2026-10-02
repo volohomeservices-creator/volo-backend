@@ -6,7 +6,8 @@
     "dev": "next dev -p 5005 -H 0.0.0.0",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run"
   },
   "dependencies": {
     "@supabase/auth-helpers-nextjs": "^0.15.0",
@@ -54,7 +55,8 @@
     "eslint-config-next": "16.2.7",
     "postcss": "^8.4.38",
     "tailwindcss": "^4.3.2",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^1.6.0"
   },
   "optionalDependencies": {
     "@next/swc-wasm-nodejs": "16.2.9"

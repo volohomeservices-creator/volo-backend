@@ -52,6 +52,11 @@
   "exclude": [
     "node_modules",
     "mobile",
-    "packages"
+    "packages",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "**/__tests__/**"
   ]
 }
