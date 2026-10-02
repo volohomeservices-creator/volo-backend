@@ -136,12 +136,12 @@ export async function GET(
 
       const workers = (workersRes.data || []).map((w: any) => ({
         name: `${w.full_name} (${w.phone})`,
-        url: `/admin/workers/${w.id}`
+        url: `/admin/workers/view?id=${w.id}`
       }));
 
       const customers = (customersRes.data || []).map((c: any) => ({
         name: `${c.full_name} (${c.phone})`,
-        url: `/admin/customers/${c.id}`
+        url: `/admin/customers/view?id=${c.id}`
       }));
 
       const bookingsCombined = [...bookingByUuid, ...(bookingsRes.data || [])];
