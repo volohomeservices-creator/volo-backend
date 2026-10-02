@@ -12,7 +12,9 @@ const clientEmail = process.env.FIREBASE_ADMIN_CLIENT_EMAIL;
 const privateKey = process.env.FIREBASE_ADMIN_PRIVATE_KEY;
 
 if (!getApps().length) {
-  if (!projectId || !clientEmail || !privateKey) {
+  if (process.env.NEXT_PHASE === 'phase-production-build') {
+    // Avoid noise during build container phase
+  } else if (!projectId || !clientEmail || !privateKey) {
     const errorMsg = 'Firebase Admin initialization failed: FIREBASE_ADMIN_PROJECT_ID, FIREBASE_ADMIN_CLIENT_EMAIL, and FIREBASE_ADMIN_PRIVATE_KEY must be configured.';
     console.warn(`[Firebase Admin] ${errorMsg}`);
   } else {

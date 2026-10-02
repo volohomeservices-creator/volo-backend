@@ -31,6 +31,12 @@ let validated = false;
 export function validateEnv() {
   if (validated) return;
 
+  // In Next.js, 'next build' compiles routes in a separate build container
+  // where hosting providers (like Hostinger) only inject runtime variables on server start.
+  if (process.env.NEXT_PHASE === 'phase-production-build') {
+    return;
+  }
+
   const missing: string[] = [];
   const invalid: string[] = [];
   const isProduction = process.env.NODE_ENV === 'production';
