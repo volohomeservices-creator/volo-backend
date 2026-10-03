@@ -27,7 +27,32 @@ export async function POST(request: Request) {
       firebase_uid = decoded.uid;
       phone = decoded.phone_number;
     } catch (err: any) {
-      return NextResponse.json({ error: 'FIREBASE_TOKEN_INVALID' }, { status: 401 });
+      console.error('[/api/auth/sync] Firebase token verification error:', err?.code || err?.message || err);
+      const isConfigError =
+        err?.message?.includes('not initialized') ||
+        err?.message?.includes('FIREBASE_ADMIN') ||
+        err?.message?.includes('certificate') ||
+        err?.code === 'app/no-app';
+
+      if (isConfigError) {
+        return NextResponse.json({
+          error: 'FIREBASE_CONFIG_ERROR',
+          message: 'Firebase Admin SDK is not properly configured on server. Check FIREBASE_ADMIN_* environment variables.',
+          details: err?.message
+        }, { status: 500 });
+      }
+
+      if (err?.code === 'auth/id-token-expired') {
+        return NextResponse.json({
+          error: 'FIREBASE_TOKEN_EXPIRED',
+          message: 'Firebase verification token expired. Please request a new OTP.'
+        }, { status: 401 });
+      }
+
+      return NextResponse.json({
+        error: 'FIREBASE_TOKEN_INVALID',
+        message: err?.message || 'Invalid verification token'
+      }, { status: 401 });
     }
 
     if (!phone) {

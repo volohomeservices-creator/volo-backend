@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase-server';
+import { getFirebaseAdminStatus } from '@/lib/firebase-admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +20,7 @@ export async function GET() {
     dbError = err.message || err;
   }
 
+  const firebaseStatus = getFirebaseAdminStatus();
   const memory = process.memoryUsage();
 
   return NextResponse.json({
@@ -29,6 +31,7 @@ export async function GET() {
       status: dbStatus,
       error: dbError
     },
+    firebaseAdmin: firebaseStatus,
     system: {
       memory: {
         rss: `${Math.round(memory.rss / 1024 / 1024)} MB`,
