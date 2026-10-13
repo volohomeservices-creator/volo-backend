@@ -73,7 +73,7 @@ export class RazorpayRoutePayoutProvider implements PayoutProvider {
     return contactId;
   }
 
-  async createPayout(fundAccountId: string, amount: number, referenceId: string): Promise<{ providerPayoutId: string, status: string }> {
+  async createPayout(fundAccountId: string, amount: number, referenceId: string, bankAccountDetails?: any): Promise<{ providerPayoutId: string, status: string }> {
     if (this.isMockMode()) {
       console.log(`[Mock Payout Provider] Creating Route Transfer of ₹${amount} to account: ${fundAccountId}`);
       return {
@@ -168,8 +168,8 @@ export class DefaultPayoutProvider implements PayoutProvider {
     return this.getProvider().createFundAccount(contactId, bankAccountDetails);
   }
 
-  createPayout(fundAccountId: string, amount: number, referenceId: string): Promise<{ providerPayoutId: string; status: string; utr?: string | null; isLive?: boolean }> {
-    return this.getProvider().createPayout(fundAccountId, amount, referenceId);
+  createPayout(fundAccountId: string, amount: number, referenceId: string, bankAccountDetails?: any): Promise<{ providerPayoutId: string; status: string; utr?: string | null; isLive?: boolean }> {
+    return this.getProvider().createPayout(fundAccountId, amount, referenceId, bankAccountDetails);
   }
 
   fetchPayoutStatus(providerPayoutId: string): Promise<{ status: string; utr: string | null; failureReason: string | null }> {

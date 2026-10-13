@@ -180,7 +180,7 @@ export class PayoutService {
             .eq('id', bankAccount.id);
         }
 
-        const transferResult = await this.getProvider().createPayout(fundAccountId, Number(payout.amount), payout.id);
+        const transferResult = await this.getProvider().createPayout(fundAccountId, Number(payout.amount), payout.id, bankAccount);
         const isSuccess = transferResult.status === 'processed';
         const finalStatus = isSuccess ? PayoutStatus.PAID : PayoutStatus.PROCESSING;
 

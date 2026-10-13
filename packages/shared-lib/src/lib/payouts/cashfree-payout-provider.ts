@@ -190,10 +190,14 @@ export class CashfreePayoutProvider implements PayoutProvider {
   /**
    * Executes a payout transfer to the registered beneficiary.
    */
+  /**
+   * Executes a payout transfer using Cashfree Payouts V2 Standard Transfers API.
+   */
   async createPayout(
     fundAccountId: string,
     amount: number,
-    referenceId: string
+    referenceId: string,
+    bankAccountDetails?: any
   ): Promise<{ providerPayoutId: string; status: string; utr?: string | null; isLive: boolean }> {
     const isLive = this.isLiveEnabled();
 
@@ -208,31 +212,73 @@ export class CashfreePayoutProvider implements PayoutProvider {
       };
     }
 
-    const token = await this.authorize();
+    if (!this.clientId || !this.clientSecret) {
+      throw new ProviderNotConfiguredError('CASHFREE');
+    }
+
     const transferId = `trf_${referenceId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`;
     const formattedAmount = Number(amount).toFixed(2);
 
-    const payload = {
-      beneId: fundAccountId,
-      amount: formattedAmount,
-      transferId,
-      transferMode: 'banktransfer',
+    // Extract & decrypt recipient bank details
+    let rawAccount = bankAccountDetails?.account_number || '';
+    if (!rawAccount && bankAccountDetails?.account_number_encrypted) {
+      try {
+        rawAccount = decryptData(bankAccountDetails.account_number_encrypted);
+      } catch (e) {
+        console.error('[Cashfree Payouts] Failed to decrypt account number for transfer payload');
+      }
+    }
+
+    const cleanAccount = String(rawAccount || '').trim();
+    const cleanIfsc = String(bankAccountDetails?.ifsc_code || '').trim().toUpperCase();
+    const cleanName = String(bankAccountDetails?.account_holder_name || 'Volo Partner').trim();
+    const cleanPhone = String(bankAccountDetails?.phone || '9999999999').replace(/\D/g, '').slice(-10) || '9999999999';
+    const cleanEmail = (bankAccountDetails?.email && bankAccountDetails.email.includes('@'))
+      ? bankAccountDetails.email
+      : `partner.${fundAccountId}@voloapp.in`;
+
+    const v2BaseUrl = this.environment === 'production'
+      ? 'https://api.cashfree.com/payout'
+      : 'https://sandbox.cashfree.com/payout';
+
+    const payload: any = {
+      transfer_id: transferId,
+      transfer_amount: Number(formattedAmount),
+      transfer_mode: 'banktransfer',
       remarks: 'VOLO Weekly Settlement',
     };
 
+    if (cleanAccount && cleanIfsc) {
+      payload.beneficiary_details = {
+        beneficiary_name: cleanName,
+        beneficiary_instrument_details: {
+          bank_account_number: cleanAccount,
+          bank_ifsc: cleanIfsc,
+        },
+        beneficiary_contact_details: {
+          beneficiary_phone: cleanPhone,
+          beneficiary_email: cleanEmail,
+        },
+      };
+    } else {
+      payload.beneficiary_details = {
+        beneficiary_id: fundAccountId,
+      };
+    }
+
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}/payout/v1/requestTransfer`, {
+      response = await fetch(`${v2BaseUrl}/transfers`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          'x-client-id': this.clientId,
+          'x-client-secret': this.clientSecret,
+          'x-api-version': '2024-01-01',
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload),
       });
     } catch (networkErr: any) {
-      // CRITICAL: A timeout or network error does not prove that a transfer failed.
-      // Throw an error preserving the transferId so the payout engine records outcome as UNCERTAIN.
       console.error(`[Cashfree Payouts] Network error requesting transfer ${transferId}:`, networkErr);
       const uncertainErr: any = new Error(`Network timeout contacting Cashfree. Transfer may be pending with ID: ${transferId}`);
       uncertainErr.isUncertain = true;
@@ -243,7 +289,7 @@ export class CashfreePayoutProvider implements PayoutProvider {
     const data = await response.json().catch(() => null);
 
     if (!response.ok || !data) {
-      const msg = data?.message || `Cashfree transfer request failed with HTTP ${response.status}`;
+      const msg = data?.message || data?.status_description || `Cashfree transfer request failed with HTTP ${response.status}`;
       console.error(`[Cashfree Payouts] Transfer rejected:`, msg);
       throw new Error(`Cashfree Transfer Error: ${msg}`);
     }
@@ -252,24 +298,24 @@ export class CashfreePayoutProvider implements PayoutProvider {
       throw new Error(`Cashfree Transfer Error [${data.subCode}]: ${data.message}`);
     }
 
-    // Map Cashfree response status
-    const cfStatus = (data.data?.status || data.status || 'PENDING').toUpperCase();
+    const cfStatus = (data.status || data.status_code || 'PENDING').toUpperCase();
     let mappedStatus = 'processing';
     if (cfStatus === 'SUCCESS') mappedStatus = 'processed';
-    else if (cfStatus === 'FAILED') mappedStatus = 'failed';
+    else if (cfStatus === 'FAILED' || cfStatus === 'REJECTED') mappedStatus = 'failed';
     else if (cfStatus === 'REVERSED') mappedStatus = 'reversed';
+    else if (cfStatus === 'RECEIVED' || cfStatus === 'PENDING') mappedStatus = 'processing';
 
-    const providerRef = data.data?.referenceId || transferId;
+    const providerRef = data.cf_transfer_id ? String(data.cf_transfer_id) : (data.transfer_id || transferId);
     return {
       providerPayoutId: providerRef,
       status: mappedStatus,
-      utr: data.data?.utr || null,
+      utr: data.utr || null,
       isLive: true,
     };
   }
 
   /**
-   * Fetches the authoritative status of a transfer from Cashfree.
+   * Fetches the authoritative status of a transfer from Cashfree V2.
    */
   async fetchPayoutStatus(
     providerPayoutId: string
@@ -282,24 +328,23 @@ export class CashfreePayoutProvider implements PayoutProvider {
       };
     }
 
-    const token = await this.authorize();
+    const v2BaseUrl = this.environment === 'production'
+      ? 'https://api.cashfree.com/payout'
+      : 'https://sandbox.cashfree.com/payout';
 
-    // Query status by referenceId or transferId
-    const queryParam = providerPayoutId.startsWith('trf_')
-      ? `transferId=${encodeURIComponent(providerPayoutId)}`
-      : `referenceId=${encodeURIComponent(providerPayoutId)}`;
-
-    const response = await fetch(`${this.baseUrl}/payout/v1/getTransferStatus?${queryParam}`, {
+    const response = await fetch(`${v2BaseUrl}/transfers?transfer_id=${encodeURIComponent(providerPayoutId)}`, {
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        'x-client-id': this.clientId,
+        'x-client-secret': this.clientSecret,
+        'x-api-version': '2024-01-01',
         'Content-Type': 'application/json',
       },
     });
 
     const data = await response.json().catch(() => null);
-    if (!response.ok || !data || data.status !== 'SUCCESS') {
-      const msg = data?.message || `Failed to fetch transfer status (${response.status})`;
+    if (!response.ok || !data) {
+      const msg = data?.message || data?.status_description || `Failed to fetch transfer status (${response.status})`;
       return {
         status: 'unknown',
         utr: null,
@@ -307,19 +352,18 @@ export class CashfreePayoutProvider implements PayoutProvider {
       };
     }
 
-    const transferData = data.data?.transfer || data.data;
-    const cfStatus = (transferData?.status || '').toUpperCase();
+    const cfStatus = (data.status || data.status_code || '').toUpperCase();
     let status = 'processing';
     if (cfStatus === 'SUCCESS') status = 'processed';
-    else if (cfStatus === 'FAILED') status = 'failed';
+    else if (cfStatus === 'FAILED' || cfStatus === 'REJECTED') status = 'failed';
     else if (cfStatus === 'REVERSED') status = 'reversed';
-    else if (cfStatus === 'PENDING') status = 'processing';
+    else if (cfStatus === 'PENDING' || cfStatus === 'RECEIVED') status = 'processing';
 
     return {
       status,
-      utr: transferData?.utr || null,
-      failureReason: transferData?.reason || null,
-      raw: transferData,
+      utr: data.utr || null,
+      failureReason: data.status_description || null,
+      raw: data,
     };
   }
 
