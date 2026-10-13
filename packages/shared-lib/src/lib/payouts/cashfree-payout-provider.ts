@@ -216,7 +216,7 @@ export class CashfreePayoutProvider implements PayoutProvider {
       throw new ProviderNotConfiguredError('CASHFREE');
     }
 
-    const transferId = `trf_${referenceId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`;
+    const transferId = `trf_${referenceId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 16)}_${Date.now().toString().slice(-6)}`;
     const formattedAmount = Number(amount).toFixed(2);
 
     // Extract & decrypt recipient bank details
@@ -332,7 +332,12 @@ export class CashfreePayoutProvider implements PayoutProvider {
       ? 'https://api.cashfree.com/payout'
       : 'https://sandbox.cashfree.com/payout';
 
-    const response = await fetch(`${v2BaseUrl}/transfers?transfer_id=${encodeURIComponent(providerPayoutId)}`, {
+    const isCfTransferId = /^\d+$/.test(providerPayoutId);
+    const queryParam = isCfTransferId
+      ? `cf_transfer_id=${encodeURIComponent(providerPayoutId)}`
+      : `transfer_id=${encodeURIComponent(providerPayoutId)}`;
+
+    let response = await fetch(`${v2BaseUrl}/transfers?${queryParam}`, {
       method: 'GET',
       headers: {
         'x-client-id': this.clientId,
@@ -342,7 +347,26 @@ export class CashfreePayoutProvider implements PayoutProvider {
       },
     });
 
-    const data = await response.json().catch(() => null);
+    let data = await response.json().catch(() => null);
+
+    // If initial query didn't find the transfer, try the alternative query param as fallback
+    if ((!response.ok || !data || data.status === 'ERROR') && !isCfTransferId) {
+      const fallbackResp = await fetch(`${v2BaseUrl}/transfers?cf_transfer_id=${encodeURIComponent(providerPayoutId)}`, {
+        method: 'GET',
+        headers: {
+          'x-client-id': this.clientId,
+          'x-client-secret': this.clientSecret,
+          'x-api-version': '2024-01-01',
+          'Content-Type': 'application/json',
+        },
+      });
+      const fallbackData = await fallbackResp.json().catch(() => null);
+      if (fallbackResp.ok && fallbackData && fallbackData.status !== 'ERROR') {
+        response = fallbackResp;
+        data = fallbackData;
+      }
+    }
+
     if (!response.ok || !data) {
       const msg = data?.message || data?.status_description || `Failed to fetch transfer status (${response.status})`;
       return {
@@ -352,7 +376,8 @@ export class CashfreePayoutProvider implements PayoutProvider {
       };
     }
 
-    const cfStatus = (data.status || data.status_code || '').toUpperCase();
+    const payloadObj = data?.data || data;
+    const cfStatus = (payloadObj.status || payloadObj.status_code || '').toUpperCase();
     let status = 'processing';
     if (cfStatus === 'SUCCESS') status = 'processed';
     else if (cfStatus === 'FAILED' || cfStatus === 'REJECTED') status = 'failed';
@@ -361,8 +386,8 @@ export class CashfreePayoutProvider implements PayoutProvider {
 
     return {
       status,
-      utr: data.utr || null,
-      failureReason: data.status_description || null,
+      utr: payloadObj.utr || null,
+      failureReason: payloadObj.status_description || payloadObj.message || null,
       raw: data,
     };
   }

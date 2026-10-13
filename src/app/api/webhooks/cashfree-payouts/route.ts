@@ -58,16 +58,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ status: 'SUCCESS', message: 'Raw ping received' }, { status: 200 });
     }
 
-    // Extract event details
+    // Extract event details (supporting both V1 and V2 snake_case & camelCase payloads)
     const eventType = (payload.event || payload.type || payload.event_type || 'TRANSFER_UPDATE').toUpperCase();
-    const transferId = payload.transferId || payload.data?.transferId || payload.data?.transfer?.transferId;
-    const referenceId = payload.referenceId || payload.data?.referenceId || payload.data?.transfer?.referenceId;
+    const transferId = payload.data?.transfer_id || payload.transfer_id || payload.transferId || payload.data?.transferId || payload.data?.transfer?.transferId;
+    const referenceId = payload.data?.reference_id || payload.reference_id || payload.referenceId || payload.data?.referenceId || payload.data?.transfer?.referenceId;
+    const cfTransferId = payload.data?.cf_transfer_id || payload.cf_transfer_id || payload.data?.cfTransferId || payload.cfTransferId;
     const utr = payload.utr || payload.data?.utr || payload.data?.transfer?.utr || null;
     const status = (payload.status || payload.data?.status || payload.data?.transfer?.status || '').toUpperCase();
-    const reason = payload.reason || payload.data?.reason || payload.data?.transfer?.reason || null;
-    const eventId = payload.eventId || payload.id || `${transferId || referenceId}_${eventType}_${Date.now()}`;
+    const reason = payload.reason || payload.data?.reason || payload.data?.transfer?.reason || payload.data?.status_description || null;
+    const eventId = payload.eventId || payload.id || `${cfTransferId || transferId || referenceId}_${eventType}_${Date.now()}`;
 
-    console.log(`[Cashfree Webhook] Received ${eventType} for transferId=${transferId}, referenceId=${referenceId}`);
+    console.log(`[Cashfree Webhook] Received ${eventType} for transferId=${transferId}, cfTransferId=${cfTransferId}, referenceId=${referenceId}, status=${status}`);
 
     // Deduplication check
     const { data: existingEvent } = await supabaseAdmin
@@ -94,18 +95,27 @@ export async function POST(request: Request) {
 
     // Find the associated payout record in Volo database
     let query = supabaseAdmin.from('payouts').select('*');
+    const matchConditions: string[] = [];
+    if (cfTransferId) matchConditions.push(`provider_reference.eq.${cfTransferId}`);
+    if (transferId) {
+      matchConditions.push(`provider_reference.eq.${transferId}`);
+      matchConditions.push(`id.eq.${transferId.replace('trf_', '')}`);
+    }
     if (referenceId) {
-      query = query.or(`provider_reference.eq.${referenceId},id.eq.${referenceId}`);
-    } else if (transferId) {
-      query = query.or(`provider_reference.eq.${transferId},id.eq.${transferId.replace('trf_', '')}`);
-    } else {
-      console.warn('[Cashfree Webhook] No referenceId or transferId in payload. Stored audit only.');
+      matchConditions.push(`provider_reference.eq.${referenceId}`);
+      matchConditions.push(`id.eq.${referenceId}`);
+    }
+
+    if (matchConditions.length === 0) {
+      console.warn('[Cashfree Webhook] No referenceId, transferId, or cfTransferId in payload. Stored audit only.');
       return NextResponse.json({ status: 'RECORDED_NO_MATCH' }, { status: 200 });
     }
 
+    query = query.or(matchConditions.join(','));
+
     const { data: payoutRecords, error: fetchErr } = await query;
     if (fetchErr || !payoutRecords || payoutRecords.length === 0) {
-      console.warn(`[Cashfree Webhook] Payout not found for reference: ${referenceId || transferId}`);
+      console.warn(`[Cashfree Webhook] Payout not found for references: ${matchConditions.join(', ')}`);
       return NextResponse.json({ status: 'RECORDED_UNMATCHED' }, { status: 200 });
     }
 
@@ -119,7 +129,7 @@ export async function POST(request: Request) {
 
     // Process State Transitions
     const isSuccess = eventType === 'TRANSFER_SUCCESS' || status === 'SUCCESS';
-    const isFailed = eventType === 'TRANSFER_FAILED' || eventType === 'TRANSFER_REJECTED' || status === 'FAILED';
+    const isFailed = eventType === 'TRANSFER_FAILED' || eventType === 'TRANSFER_REJECTED' || status === 'FAILED' || status === 'REJECTED';
     const isReversed = eventType === 'TRANSFER_REVERSED' || status === 'REVERSED';
 
     if (isSuccess) {

@@ -296,11 +296,11 @@ export class PayoutService {
    * Reconciles uncertain or pending payouts directly against provider
    */
   static async reconcilePayouts() {
+    // 1. Fetch non-terminal or unconfirmed payouts: PROCESSING, QUEUED, or FAILED
     const { data: pendingPayouts } = await supabaseAdmin
       .from('payouts')
-      .select('id, provider, provider_reference, settlement_ledger_id, worker_id, amount')
-      .in('status', [PayoutStatus.PROCESSING, PayoutStatus.QUEUED])
-      .not('provider_reference', 'is', null);
+      .select('id, provider, provider_reference, settlement_ledger_id, worker_id, amount, status')
+      .in('status', [PayoutStatus.PROCESSING, PayoutStatus.QUEUED, PayoutStatus.FAILED]);
 
     if (!pendingPayouts || pendingPayouts.length === 0) {
       return { success: true, reconciledCount: 0, message: 'No pending payouts to reconcile.' };
@@ -309,12 +309,33 @@ export class PayoutService {
     let reconciledCount = 0;
     for (const p of pendingPayouts) {
       try {
-        const statusResult = await this.getProvider().fetchPayoutStatus(p.provider_reference!);
+        let reference = p.provider_reference;
+
+        // If provider_reference is missing, search the latest attempt payload
+        if (!reference) {
+          const { data: attempts } = await supabaseAdmin
+            .from('payout_attempts')
+            .select('response_payload, request_payload')
+            .eq('payout_id', p.id)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (attempts && attempts.length > 0) {
+            const resp = attempts[0].response_payload;
+            const req = attempts[0].request_payload;
+            reference = resp?.providerPayoutId || resp?.transferId || req?.referenceId;
+          }
+        }
+
+        if (!reference) continue;
+
+        const statusResult = await this.getProvider().fetchPayoutStatus(reference);
         if (statusResult.status === 'processed') {
           await supabaseAdmin
             .from('payouts')
             .update({
               status: PayoutStatus.PAID,
+              provider_reference: reference,
               utr_number: statusResult.utr,
               provider_status: 'SUCCESS',
               processed_at: new Date().toISOString(),
@@ -327,6 +348,7 @@ export class PayoutService {
               .from('settlement_ledger')
               .update({
                 status: 'PAID',
+                cashfree_transfer_id: reference,
                 payout_completed_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
               })
@@ -341,15 +363,27 @@ export class PayoutService {
           });
 
           reconciledCount++;
-        } else if (statusResult.status === 'failed') {
+        } else if (statusResult.status === 'failed' || statusResult.status === 'reversed') {
           await supabaseAdmin
             .from('payouts')
             .update({
               status: PayoutStatus.FAILED,
+              provider_reference: reference,
+              provider_status: statusResult.status === 'reversed' ? 'REVERSED' : 'REJECTED',
               failure_reason: statusResult.failureReason || 'Transfer rejected by provider',
               updated_at: new Date().toISOString()
             })
             .eq('id', p.id);
+
+          if (p.settlement_ledger_id) {
+            await supabaseAdmin
+              .from('settlement_ledger')
+              .update({
+                cashfree_transfer_id: reference,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', p.settlement_ledger_id);
+          }
           reconciledCount++;
         }
       } catch (err: any) {
