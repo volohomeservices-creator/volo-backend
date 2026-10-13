@@ -10,7 +10,7 @@ let encryptionKeyBuffer: Buffer | null = null;
 function getEncryptionKey(): Buffer {
   if (encryptionKeyBuffer) return encryptionKeyBuffer;
 
-  const key = process.env.BANK_ENCRYPTION_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || 'volo-secure-banking-aes256-encryption-key-32b';
+  const key = process.env.BANK_ENCRYPTION_KEY || '6f967505ccf07a1515d94577d053a7ea7ba2a4fdc42898c0a5eb31591fa421bb';
 
   // Ensure the key is exactly 32 bytes for aes-256-cbc
   encryptionKeyBuffer = Buffer.from(key.padEnd(32, '0').slice(0, 32));
