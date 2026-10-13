@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth';
-import { CashfreePayoutProvider } from '@/lib/payouts/cashfree-payout-provider';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   try {
     const session = await requireRole(request, 'admin');
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+    const { CashfreePayoutProvider } = await import('@/lib/payouts/cashfree-payout-provider');
     const provider = new CashfreePayoutProvider();
     const isLive = provider.isLiveEnabled();
     const env = provider.getEnvironment();
@@ -37,6 +39,7 @@ export async function GET(request: Request) {
       });
     }
   } catch (error: any) {
-    return NextResponse.json({ error: error.message || 'Failed to check balance' }, { status: 500 });
+    const status = error.status || (error.message === 'UNAUTHORIZED' ? 401 : error.message === 'FORBIDDEN' ? 403 : 500);
+    return NextResponse.json({ error: error.message || 'Failed to check balance' }, { status });
   }
 }

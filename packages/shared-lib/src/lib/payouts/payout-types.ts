@@ -46,3 +46,12 @@ export interface PayoutProviderConfig {
   created_at: string;
   updated_at: string;
 }
+
+export interface PayoutProvider {
+  createContact(workerId: string, name: string, email: string, phone: string): Promise<string>;
+  createFundAccount(contactId: string, bankAccountDetails: any): Promise<string>;
+  createPayout(fundAccountId: string, amount: number, referenceId: string): Promise<{ providerPayoutId: string; status: string; utr?: string | null; isLive?: boolean }>;
+  fetchPayoutStatus(providerPayoutId: string): Promise<{ status: string; utr: string | null; failureReason: string | null }>;
+  verifyBankAccount(bankAccountDetails: any): Promise<boolean>;
+}
+

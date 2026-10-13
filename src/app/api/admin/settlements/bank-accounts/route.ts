@@ -7,7 +7,9 @@ const supabaseAdmin: any = supabaseAdminOriginal;
 import { logAuditAction } from '@/lib/audit';
 import { AuditAction } from '@/types';
 import { dispatchNotification } from '@/lib/notification-dispatcher';
-import { decryptBankAccount } from '@/lib/settlement-engine';
+import { decryptData } from '@/lib/crypto';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   try {
@@ -25,7 +27,7 @@ export async function GET(request: Request) {
     const decryptedData = data.map(account => {
       let decryptedAccount = '';
       try {
-        decryptedAccount = decryptBankAccount(account.account_number_encrypted);
+        decryptedAccount = decryptData(account.account_number_encrypted);
       } catch (e) {
         decryptedAccount = 'Error Decrypting';
       }
@@ -37,7 +39,8 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ accounts: decryptedData });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const status = error.status || (error.message === 'UNAUTHORIZED' ? 401 : error.message === 'FORBIDDEN' ? 403 : 500);
+    return NextResponse.json({ error: error.message }, { status });
   }
 }
 
@@ -126,6 +129,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, is_verified: isVerified });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const status = error.status || (error.message === 'UNAUTHORIZED' ? 401 : error.message === 'FORBIDDEN' ? 403 : 500);
+    return NextResponse.json({ error: error.message }, { status });
   }
 }

@@ -3,6 +3,8 @@ import { requireRole } from '@/lib/auth';
 import { supabaseAdmin as supabaseAdminOriginal } from '@/lib/supabase-server';
 const supabaseAdmin: any = supabaseAdminOriginal;
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
   try {
     const session = await requireRole(request, 'admin');
@@ -105,7 +107,8 @@ export async function GET(request: Request) {
     });
   } catch (error: any) {
     console.error('Admin settlements API error:', error);
-    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 });
+    const status = error.status || (error.message === 'UNAUTHORIZED' ? 401 : error.message === 'FORBIDDEN' ? 403 : 500);
+    return NextResponse.json({ error: error.message || 'Internal server error' }, { status });
   }
 }
 
@@ -238,7 +241,8 @@ export async function DELETE(request: Request) {
     });
   } catch (error: any) {
     console.error('Admin delete batch error:', error);
-    return NextResponse.json({ error: error.message || 'Failed to delete batch' }, { status: 500 });
+    const status = error.status || (error.message === 'UNAUTHORIZED' ? 401 : error.message === 'FORBIDDEN' ? 403 : 500);
+    return NextResponse.json({ error: error.message || 'Failed to delete batch' }, { status });
   }
 }
 

@@ -3,6 +3,8 @@ import { requireRole } from '@/lib/auth';
 import { supabaseAdmin as supabaseAdminOriginal } from '@/lib/supabase-server';
 const supabaseAdmin: any = supabaseAdminOriginal;
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
   try {
     const session = await requireRole(request, 'admin');
@@ -114,6 +116,7 @@ export async function GET(request: Request) {
     });
   } catch (err: any) {
     console.error('Error fetching batch itemized workers:', err);
-    return NextResponse.json({ error: err.message || 'Internal server error' }, { status: 500 });
+    const status = err.status || (err.message === 'UNAUTHORIZED' ? 401 : err.message === 'FORBIDDEN' ? 403 : 500);
+    return NextResponse.json({ error: err.message || 'Internal server error' }, { status });
   }
 }

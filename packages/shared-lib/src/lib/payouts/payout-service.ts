@@ -8,7 +8,14 @@ import { ProviderNotConfiguredError } from './payout-errors';
 import { dispatchNotification } from '../notification-dispatcher';
 
 export class PayoutService {
-  private static provider = new DefaultPayoutProvider();
+  private static provider: DefaultPayoutProvider | null = null;
+
+  private static getProvider(): DefaultPayoutProvider {
+    if (!this.provider) {
+      this.provider = new DefaultPayoutProvider();
+    }
+    return this.provider;
+  }
 
   /**
    * Called when an admin marks a Settlement Batch as READY_FOR_PAYOUT
@@ -144,8 +151,8 @@ export class PayoutService {
           const userEmail = (worker?.users as any)?.email || '';
           const userPhone = (worker?.users as any)?.phone || '';
 
-          const contactId = await this.provider.createContact(payout.worker_id, userName, userEmail, userPhone);
-          fundAccountId = await this.provider.createFundAccount(contactId, bankAccount);
+          const contactId = await this.getProvider().createContact(payout.worker_id, userName, userEmail, userPhone);
+          fundAccountId = await this.getProvider().createFundAccount(contactId, bankAccount);
 
           if (bankAccount) {
             await supabaseAdmin
@@ -160,7 +167,7 @@ export class PayoutService {
           }
         }
 
-        const transferResult = await this.provider.createPayout(fundAccountId, Number(payout.amount), payout.id);
+        const transferResult = await this.getProvider().createPayout(fundAccountId, Number(payout.amount), payout.id);
         const isSuccess = transferResult.status === 'processed';
         const finalStatus = isSuccess ? PayoutStatus.PAID : PayoutStatus.PROCESSING;
 
@@ -289,7 +296,7 @@ export class PayoutService {
     let reconciledCount = 0;
     for (const p of pendingPayouts) {
       try {
-        const statusResult = await this.provider.fetchPayoutStatus(p.provider_reference!);
+        const statusResult = await this.getProvider().fetchPayoutStatus(p.provider_reference!);
         if (statusResult.status === 'processed') {
           await supabaseAdmin
             .from('payouts')

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth';
 import { supabaseAdmin } from '@/lib/supabase-server';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
   try {
     const session = await requireRole(request, 'admin');
@@ -45,8 +47,8 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ payouts: payouts || [] });
   } catch (error: any) {
-    console.error('Payout status fetch error:', error);
-    return NextResponse.json({ error: error.message || 'Failed to fetch payouts' }, { status: 500 });
+    const status = error.status || (error.message === 'UNAUTHORIZED' ? 401 : error.message === 'FORBIDDEN' ? 403 : 500);
+    return NextResponse.json({ error: error.message || 'Failed to fetch payouts' }, { status });
   }
 }
 
@@ -78,6 +80,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, message: 'Payout reset to READY_FOR_PAYOUT for retry' });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message || 'Failed to reset payout' }, { status: 500 });
+    const status = error.status || (error.message === 'UNAUTHORIZED' ? 401 : error.message === 'FORBIDDEN' ? 403 : 500);
+    return NextResponse.json({ error: error.message || 'Failed to reset payout' }, { status });
   }
 }

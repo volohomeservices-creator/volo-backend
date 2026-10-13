@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { validateBody } from '@/lib/zod-validator';
 import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth';
-import { PayoutService } from '@/lib/payouts/payout-service';
+
+export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
@@ -17,11 +18,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing batchId' }, { status: 400 });
     }
 
+    const { PayoutService } = await import('@/lib/payouts/payout-service');
     const result = await PayoutService.executePayoutsForBatch(batchId, session.user_id);
 
     return NextResponse.json(result);
   } catch (error: any) {
     console.error('Error executing payouts for batch:', error);
-    return NextResponse.json({ error: error.message || 'Failed to execute payouts' }, { status: 500 });
+    const status = error.status || (error.message === 'UNAUTHORIZED' ? 401 : error.message === 'FORBIDDEN' ? 403 : 500);
+    return NextResponse.json({ error: error.message || 'Failed to execute payouts' }, { status });
   }
 }

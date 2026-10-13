@@ -4,6 +4,8 @@ import { supabaseAdmin } from '@/lib/supabase-server';
 import { PayoutStatus } from '@/lib/payouts/payout-types';
 import { dispatchNotification } from '@/lib/notification-dispatcher';
 
+export const dynamic = 'force-dynamic';
+
 function verifyCashfreeSignature(rawBody: string, signature: string | null, secret: string): boolean {
   if (!secret) return true; // If no secret configured yet in sandbox/test, allow through
   if (!signature) return false;

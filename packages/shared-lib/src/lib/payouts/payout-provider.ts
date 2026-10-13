@@ -1,13 +1,8 @@
 import Razorpay from 'razorpay';
 import { ProviderNotConfiguredError } from './payout-errors';
 
-export interface PayoutProvider {
-  createContact(workerId: string, name: string, email: string, phone: string): Promise<string>;
-  createFundAccount(contactId: string, bankAccountDetails: any): Promise<string>;
-  createPayout(fundAccountId: string, amount: number, referenceId: string): Promise<{ providerPayoutId: string, status: string }>;
-  fetchPayoutStatus(providerPayoutId: string): Promise<{ status: string, utr: string | null, failureReason: string | null }>;
-  verifyBankAccount(bankAccountDetails: any): Promise<boolean>;
-}
+import { PayoutProvider } from './payout-types';
+export type { PayoutProvider };
 
 export class RazorpayRoutePayoutProvider implements PayoutProvider {
   private getClient(): Razorpay | null {
@@ -152,34 +147,38 @@ import { CashfreePayoutProvider } from './cashfree-payout-provider';
 export { CashfreePayoutProvider };
 
 export class DefaultPayoutProvider implements PayoutProvider {
-  private activeProvider: PayoutProvider;
+  private activeProvider: PayoutProvider | null = null;
 
-  constructor() {
-    if (process.env.CASHFREE_CLIENT_ID) {
-      this.activeProvider = new CashfreePayoutProvider();
-    } else {
-      this.activeProvider = new RazorpayRoutePayoutProvider();
+  private getProvider(): PayoutProvider {
+    if (!this.activeProvider) {
+      if (process.env.CASHFREE_CLIENT_ID) {
+        this.activeProvider = new CashfreePayoutProvider();
+      } else {
+        this.activeProvider = new RazorpayRoutePayoutProvider();
+      }
     }
+    return this.activeProvider;
   }
 
   createContact(workerId: string, name: string, email: string, phone: string): Promise<string> {
-    return this.activeProvider.createContact(workerId, name, email, phone);
+    return this.getProvider().createContact(workerId, name, email, phone);
   }
 
   createFundAccount(contactId: string, bankAccountDetails: any): Promise<string> {
-    return this.activeProvider.createFundAccount(contactId, bankAccountDetails);
+    return this.getProvider().createFundAccount(contactId, bankAccountDetails);
   }
 
   createPayout(fundAccountId: string, amount: number, referenceId: string): Promise<{ providerPayoutId: string; status: string; utr?: string | null; isLive?: boolean }> {
-    return this.activeProvider.createPayout(fundAccountId, amount, referenceId);
+    return this.getProvider().createPayout(fundAccountId, amount, referenceId);
   }
 
   fetchPayoutStatus(providerPayoutId: string): Promise<{ status: string; utr: string | null; failureReason: string | null }> {
-    return this.activeProvider.fetchPayoutStatus(providerPayoutId);
+    return this.getProvider().fetchPayoutStatus(providerPayoutId);
   }
 
   verifyBankAccount(bankAccountDetails: any): Promise<boolean> {
-    return this.activeProvider.verifyBankAccount(bankAccountDetails);
+    return this.getProvider().verifyBankAccount(bankAccountDetails);
   }
 }
+
 

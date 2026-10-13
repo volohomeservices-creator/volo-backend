@@ -1,6 +1,6 @@
-import { PayoutProvider } from './payout-provider';
+import { PayoutProvider } from './payout-types';
 import { ProviderNotConfiguredError } from './payout-errors';
-import { decryptBankAccount } from '../settlement-engine';
+import { decryptData } from '../crypto';
 
 export class CashfreePayoutProvider implements PayoutProvider {
   private clientId: string;
@@ -134,7 +134,7 @@ export class CashfreePayoutProvider implements PayoutProvider {
     let rawAccount = bankAccountDetails?.account_number || '';
     if (!rawAccount && bankAccountDetails?.account_number_encrypted) {
       try {
-        rawAccount = decryptBankAccount(bankAccountDetails.account_number_encrypted);
+        rawAccount = decryptData(bankAccountDetails.account_number_encrypted);
       } catch (e) {
         console.error('[Cashfree Payouts] Failed to decrypt account number for beneficiary registration');
       }
@@ -332,7 +332,7 @@ export class CashfreePayoutProvider implements PayoutProvider {
 
     if (!accountNo && bankAccountDetails?.account_number_encrypted) {
       try {
-        accountNo = decryptBankAccount(bankAccountDetails.account_number_encrypted).trim();
+        accountNo = decryptData(bankAccountDetails.account_number_encrypted).trim();
       } catch {
         return false;
       }
