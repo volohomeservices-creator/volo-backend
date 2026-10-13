@@ -23,10 +23,20 @@ export async function GET() {
   const firebaseStatus = getFirebaseAdminStatus();
   const memory = process.memoryUsage();
 
+  let outboundIp = 'unknown';
+  try {
+    const ipRes = await fetch('https://api.ipify.org?format=json', { cache: 'no-store' });
+    const ipData = await ipRes.json();
+    outboundIp = ipData?.ip || 'unknown';
+  } catch (e: any) {
+    outboundIp = e.message || 'error';
+  }
+
   return NextResponse.json({
     status: dbStatus === 'CONNECTED' ? 'UP' : 'DEGRADED',
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.floor(process.uptime()),
+    serverOutboundIp: outboundIp,
     database: {
       status: dbStatus,
       error: dbError
