@@ -74,20 +74,37 @@ export class PayoutService {
 
     if (batchErr || !batch) throw new Error('Settlement batch not found');
 
-    // Include FAILED payouts for retry, plus any still pending/queued
+    const isLive = process.env.CASHFREE_LIVE_PAYOUTS_ENABLED === 'true';
     const { data: payouts, error: fetchErr } = await supabaseAdmin
       .from('payouts')
-      .select('id, worker_id, amount, settlement_ledger_id, status, retry_count')
-      .eq('settlement_batch_id', batchId)
-      .in('status', [PayoutStatus.READY_FOR_PAYOUT, PayoutStatus.QUEUED, PayoutStatus.PENDING, PayoutStatus.FAILED]);
+      .select('id, worker_id, amount, settlement_ledger_id, status, retry_count, provider_reference')
+      .eq('settlement_batch_id', batchId);
 
     if (fetchErr) throw fetchErr;
-    if (!payouts || payouts.length === 0) {
+
+    // Actionable payouts: READY_FOR_PAYOUT, QUEUED, PENDING, FAILED, or simulated PROCESSING
+    let actionablePayouts = (payouts || []).filter(p =>
+      [PayoutStatus.READY_FOR_PAYOUT, PayoutStatus.QUEUED, PayoutStatus.PENDING, PayoutStatus.FAILED].includes(p.status) ||
+      (isLive && p.status === PayoutStatus.PROCESSING && p.provider_reference?.startsWith('cf_sim_'))
+    );
+
+    // If no actionable payouts found, automatically attempt queueing from batch ledger
+    if (!actionablePayouts || actionablePayouts.length === 0) {
+      await this.queuePayoutsForBatch(batchId, adminId);
+      const { data: requeued } = await supabaseAdmin
+        .from('payouts')
+        .select('id, worker_id, amount, settlement_ledger_id, status, retry_count, provider_reference')
+        .eq('settlement_batch_id', batchId)
+        .in('status', [PayoutStatus.READY_FOR_PAYOUT, PayoutStatus.QUEUED, PayoutStatus.PENDING]);
+      actionablePayouts = requeued || [];
+    }
+
+    if (!actionablePayouts || actionablePayouts.length === 0) {
       return { 
         success: false, 
         processedCount: 0, 
         failedCount: 0, 
-        message: 'No payouts found for this batch. Try clicking "Mark Ready" first to queue payouts.' 
+        message: 'No pending payouts found for this batch. All disbursements may already be completed.' 
       };
     }
 
@@ -95,7 +112,7 @@ export class PayoutService {
     let failedCount = 0;
     const providerName = process.env.CASHFREE_CLIENT_ID ? 'CASHFREE' : 'RAZORPAY_ROUTE';
 
-    for (const payout of payouts) {
+    for (const payout of actionablePayouts) {
       try {
         // Concurrency Guard: Optimistically lock this payout for 5 minutes
         const now = new Date();
@@ -138,33 +155,29 @@ export class PayoutService {
           throw new Error('Worker does not have a registered bank account for settlement.');
         }
 
-        let fundAccountId = bankAccount?.beneficiary_id || bankAccount?.provider_fund_account_id;
+        const { data: worker } = await supabaseAdmin
+          .from('workers')
+          .select('id, users:id(full_name, email, phone)')
+          .eq('id', payout.worker_id)
+          .single();
 
-        if (!fundAccountId || fundAccountId.startsWith('acc_fallback_')) {
-          const { data: worker } = await supabaseAdmin
-            .from('workers')
-            .select('id, users:id(full_name, email, phone)')
-            .eq('id', payout.worker_id)
-            .single();
+        const userName = (worker?.users as any)?.full_name || bankAccount?.account_holder_name || 'Service Partner';
+        const userEmail = (worker?.users as any)?.email || '';
+        const userPhone = (worker?.users as any)?.phone || '';
 
-          const userName = (worker?.users as any)?.full_name || bankAccount?.account_holder_name || 'Service Partner';
-          const userEmail = (worker?.users as any)?.email || '';
-          const userPhone = (worker?.users as any)?.phone || '';
+        const contactId = await this.getProvider().createContact(payout.worker_id, userName, userEmail, userPhone);
+        const fundAccountId = await this.getProvider().createFundAccount(contactId, bankAccount);
 
-          const contactId = await this.getProvider().createContact(payout.worker_id, userName, userEmail, userPhone);
-          fundAccountId = await this.getProvider().createFundAccount(contactId, bankAccount);
-
-          if (bankAccount) {
-            await supabaseAdmin
-              .from('worker_bank_accounts')
-              .update({
-                beneficiary_id: fundAccountId,
-                provider_contact_id: contactId,
-                provider_fund_account_id: fundAccountId,
-                updated_at: new Date().toISOString()
-              })
-              .eq('id', bankAccount.id);
-          }
+        if (bankAccount) {
+          await supabaseAdmin
+            .from('worker_bank_accounts')
+            .update({
+              beneficiary_id: fundAccountId,
+              provider_contact_id: contactId,
+              provider_fund_account_id: fundAccountId,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', bankAccount.id);
         }
 
         const transferResult = await this.getProvider().createPayout(fundAccountId, Number(payout.amount), payout.id);
