@@ -67,7 +67,7 @@ export async function createOnlinePayment(
 }
 
 export async function captureOnlinePayment(input: {
-  customerId: string;
+  customerId?: string;
   orderId: string;
   paymentId: string;
   signature: string;
@@ -91,7 +91,7 @@ export async function captureOnlinePayment(input: {
     if (fetchErr || !existing) {
       return { success: false, error: 'Payment not found' };
     }
-    if (existing.customer_id !== input.customerId) {
+    if (input.customerId && existing.customer_id !== input.customerId) {
       return { success: false, error: 'Access denied' };
     }
     if (existing.status === 'SUCCESS') {
