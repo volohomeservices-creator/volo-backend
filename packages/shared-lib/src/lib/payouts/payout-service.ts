@@ -30,20 +30,38 @@ export class PayoutService {
     if (fetchErr) throw fetchErr;
     if (!settlements || settlements.length === 0) return { success: true, count: 0 };
 
+    // Group settlements by worker_id to consolidate earnings into 1 payout per worker per batch
+    const workerTotals = new Map<string, { totalAmount: number; ledgerIds: string[] }>();
+    for (const s of settlements) {
+      const net = Number(s.net_amount || 0);
+      if (net <= 0) continue;
+      const current = workerTotals.get(s.worker_id) || { totalAmount: 0, ledgerIds: [] };
+      current.totalAmount += net;
+      current.ledgerIds.push(s.id);
+      workerTotals.set(s.worker_id, current);
+    }
+
     let createdCount = 0;
 
-    for (const settlement of settlements) {
-      if (Number(settlement.net_amount) <= 0) continue; // No payout needed
+    for (const [workerId, item] of workerTotals.entries()) {
+      const roundedAmount = Number(item.totalAmount.toFixed(2));
+      if (roundedAmount <= 0) continue;
+
+      const insertData: any = {
+        worker_id: workerId,
+        settlement_batch_id: batchId,
+        settlement_ledger_id: item.ledgerIds[0],
+        amount: roundedAmount,
+        status: PayoutStatus.READY_FOR_PAYOUT
+      };
+
+      try {
+        insertData.settlement_ledger_ids = item.ledgerIds;
+      } catch {}
 
       const { data: payout, error: insertErr } = await supabaseAdmin
         .from('payouts')
-        .insert({
-          worker_id: settlement.worker_id,
-          settlement_batch_id: batchId,
-          settlement_ledger_id: settlement.id,
-          amount: settlement.net_amount,
-          status: PayoutStatus.READY_FOR_PAYOUT
-        })
+        .insert(insertData)
         .select('id')
         .single();
 
@@ -54,7 +72,7 @@ export class PayoutService {
           action: 'PAYOUT_CREATED' as AuditAction,
           target_type: 'payouts',
           target_id: payout.id,
-          metadata: { amount: settlement.net_amount }
+          metadata: { amount: roundedAmount, aggregatedBookingsCount: item.ledgerIds.length }
         });
       }
     }
@@ -208,19 +226,19 @@ export class PayoutService {
             status: transferResult.status
           });
 
-        if (payout.settlement_ledger_id) {
-          await supabaseAdmin
-            .from('settlement_ledger')
-            .update({
-              status: isSuccess ? 'PAID' : 'PROCESSING',
-              cashfree_transfer_id: transferResult.providerPayoutId,
-              cashfree_reference_id: transferResult.providerPayoutId,
-              payout_initiated_at: new Date().toISOString(),
-              payout_completed_at: isSuccess ? new Date().toISOString() : null,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', payout.settlement_ledger_id);
-        }
+        // Synchronize all associated settlement_ledger records for this worker in this batch
+        await supabaseAdmin
+          .from('settlement_ledger')
+          .update({
+            status: isSuccess ? 'PAID' : 'PROCESSING',
+            cashfree_transfer_id: transferResult.providerPayoutId,
+            cashfree_reference_id: transferResult.providerPayoutId,
+            payout_initiated_at: new Date().toISOString(),
+            payout_completed_at: isSuccess ? new Date().toISOString() : null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('settlement_batch_id', batchId)
+          .eq('worker_id', payout.worker_id);
 
         await dispatchNotification({
           userId: payout.worker_id,

@@ -241,29 +241,58 @@ export class CashfreePayoutProvider implements PayoutProvider {
       ? 'https://api.cashfree.com/payout'
       : 'https://sandbox.cashfree.com/payout';
 
-    const payload: any = {
-      transfer_id: transferId,
-      transfer_amount: Number(formattedAmount),
-      transfer_mode: 'banktransfer',
-      remarks: 'VOLO Weekly Settlement',
-    };
+    // Check if recipient has registered a valid UPI VPA
+    const rawUpi = (
+      bankAccountDetails?.upi_id ||
+      (bankAccountDetails?.branch?.startsWith('UPI:') ? bankAccountDetails.branch.replace('UPI:', '') : '') ||
+      ''
+    ).trim();
+    const isUpiValid = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(rawUpi);
 
-    if (cleanAccount && cleanIfsc) {
-      payload.beneficiary_details = {
-        beneficiary_name: cleanName,
-        beneficiary_instrument_details: {
-          bank_account_number: cleanAccount,
-          bank_ifsc: cleanIfsc,
-        },
-        beneficiary_contact_details: {
-          beneficiary_phone: cleanPhone,
-          beneficiary_email: cleanEmail,
+    let payload: any;
+    if (isUpiValid) {
+      console.log(`[Cashfree Payouts] Executing transfer via UPI mode to VPA: ${rawUpi}`);
+      payload = {
+        transfer_id: transferId,
+        transfer_amount: Number(formattedAmount),
+        transfer_mode: 'upi',
+        remarks: 'VOLO Weekly Settlement',
+        beneficiary_details: {
+          beneficiary_name: cleanName,
+          beneficiary_instrument_details: {
+            vpa: rawUpi,
+          },
+          beneficiary_contact_details: {
+            beneficiary_phone: cleanPhone,
+            beneficiary_email: cleanEmail,
+          },
         },
       };
     } else {
-      payload.beneficiary_details = {
-        beneficiary_id: fundAccountId,
+      payload = {
+        transfer_id: transferId,
+        transfer_amount: Number(formattedAmount),
+        transfer_mode: 'banktransfer',
+        remarks: 'VOLO Weekly Settlement',
       };
+
+      if (cleanAccount && cleanIfsc) {
+        payload.beneficiary_details = {
+          beneficiary_name: cleanName,
+          beneficiary_instrument_details: {
+            bank_account_number: cleanAccount,
+            bank_ifsc: cleanIfsc,
+          },
+          beneficiary_contact_details: {
+            beneficiary_phone: cleanPhone,
+            beneficiary_email: cleanEmail,
+          },
+        };
+      } else {
+        payload.beneficiary_details = {
+          beneficiary_id: fundAccountId,
+        };
+      }
     }
 
     let response: Response;

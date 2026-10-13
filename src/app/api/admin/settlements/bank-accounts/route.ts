@@ -31,8 +31,10 @@ export async function GET(request: Request) {
       } catch (e) {
         decryptedAccount = 'Error Decrypting';
       }
+      const upiId = account.upi_id || (account.branch?.startsWith('UPI:') ? account.branch.replace('UPI:', '').trim() : '');
       return {
         ...account,
+        upi_id: upiId || null,
         account_number_decrypted: decryptedAccount
       };
     });

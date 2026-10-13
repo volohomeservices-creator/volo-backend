@@ -37,6 +37,8 @@ export async function GET(request: Request) {
 
     if (!data) return NextResponse.json({ account: null });
 
+    const rawUpi = (data as any).upi_id || (data.branch?.startsWith('UPI:') ? data.branch.replace('UPI:', '').trim() : '');
+
     // SECURITY: Full account numbers are NEVER exposed after saving.
     // Display masked format only: •••• 9012
     return NextResponse.json({
@@ -49,6 +51,7 @@ export async function GET(request: Request) {
         account_last_four: data.account_last_four,
         masked_account_number: `•••• ${data.account_last_four}`,
         ifsc_code: data.ifsc_code,
+        upi_id: rawUpi || null,
         is_verified: data.is_verified,
         verification_status: data.verification_status || (data.is_verified ? 'VERIFIED' : 'PENDING'),
         is_primary: data.is_primary ?? true,
@@ -156,23 +159,32 @@ export async function POST(request: Request) {
       .update({ is_primary: false, updated_at: new Date().toISOString() })
       .eq('worker_id', session.user_id);
 
+    // Optional UPI VPA
+    const rawUpi = (body.upi_id || '').toString().trim();
+    const isUpiValid = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(rawUpi);
+
+    const insertPayload: any = {
+      worker_id: session.user_id,
+      account_holder_name: rawHolder,
+      bank_name: resolvedBankName,
+      branch: isUpiValid ? `UPI:${rawUpi}` : resolvedBranch,
+      account_type: cleanAccountType,
+      account_number_encrypted: encrypted,
+      account_last_four: lastFour,
+      ifsc_code: cleanIfsc,
+      is_verified: false,
+      verification_status: 'PENDING',
+      is_primary: true,
+      updated_at: new Date().toISOString()
+    };
+    if (isUpiValid) {
+      insertPayload.upi_id = rawUpi;
+    }
+
     // Insert new account record with is_primary = true and status PENDING
     const { data: newAccount, error: insertError } = await supabaseAdmin
       .from('worker_bank_accounts')
-      .insert({
-        worker_id: session.user_id,
-        account_holder_name: rawHolder,
-        bank_name: resolvedBankName,
-        branch: resolvedBranch,
-        account_type: cleanAccountType,
-        account_number_encrypted: encrypted,
-        account_last_four: lastFour,
-        ifsc_code: cleanIfsc,
-        is_verified: false,
-        verification_status: 'PENDING',
-        is_primary: true,
-        updated_at: new Date().toISOString()
-      })
+      .insert(insertPayload)
       .select('id, worker_id, account_holder_name, bank_name, branch, account_type, account_last_four, ifsc_code, is_verified, verification_status, is_primary, created_at')
       .single();
 
@@ -191,6 +203,7 @@ export async function POST(request: Request) {
         bank_name: resolvedBankName,
         account_last_four: lastFour,
         ifsc_code: cleanIfsc,
+        upi_id: isUpiValid ? rawUpi : null,
         account_type: cleanAccountType,
         verification_status: 'PENDING'
       }
@@ -204,7 +217,7 @@ export async function POST(request: Request) {
           userId: admin.id,
           type: 'MANUAL_ASSIGNMENT_CREATED' as any,
           title: 'Partner Bank Account Verification Needed',
-          body: `${rawHolder} has submitted new bank account details (${resolvedBankName} •••• ${lastFour}) for verification.`,
+          body: `${rawHolder} has submitted new payout details (${resolvedBankName} •••• ${lastFour}${isUpiValid ? `, UPI: ${rawUpi}` : ''}) for verification.`,
         });
       }
     }
@@ -220,10 +233,66 @@ export async function POST(request: Request) {
         account_last_four: newAccount.account_last_four,
         masked_account_number: `•••• ${newAccount.account_last_four}`,
         ifsc_code: newAccount.ifsc_code,
+        upi_id: isUpiValid ? rawUpi : null,
         is_verified: false,
         verification_status: 'PENDING',
         is_primary: true
       }
+    });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+// Quick UPI ID linking / updating handler
+export async function PATCH(request: Request) {
+  try {
+    const session = await requireRole(request, 'worker');
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const body = await request.json();
+    const rawUpi = (body.upi_id || '').toString().trim();
+    if (!rawUpi) {
+      return NextResponse.json({ error: 'UPI ID is required.' }, { status: 400 });
+    }
+    if (!/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(rawUpi)) {
+      return NextResponse.json({ 
+        error: 'Invalid UPI ID format. Expected format like mobile@upi, name@okaxis, etc.' 
+      }, { status: 400 });
+    }
+
+    let { data: account } = await supabaseAdmin
+      .from('worker_bank_accounts')
+      .select('id, branch')
+      .eq('worker_id', session.user_id)
+      .order('is_primary', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!account) {
+      return NextResponse.json({ 
+        error: 'Please register your bank account first before linking your UPI ID.' 
+      }, { status: 400 });
+    }
+
+    // Try updating upi_id column
+    const { error: upiColErr } = await supabaseAdmin
+      .from('worker_bank_accounts')
+      .update({ upi_id: rawUpi, updated_at: new Date().toISOString() })
+      .eq('id', account.id);
+
+    if (upiColErr) {
+      await supabaseAdmin
+        .from('worker_bank_accounts')
+        .update({ branch: `UPI:${rawUpi}`, updated_at: new Date().toISOString() })
+        .eq('id', account.id);
+    }
+
+    return NextResponse.json({ 
+      success: true, 
+      message: 'UPI ID linked successfully for instant settlements.', 
+      upi_id: rawUpi 
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
