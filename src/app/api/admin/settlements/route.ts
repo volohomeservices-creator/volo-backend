@@ -116,13 +116,129 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    let batchType: string = 'WEDNESDAY';
+    try {
+      const body = await request.json();
+      if (body?.batch_type) {
+        batchType = body.batch_type.toUpperCase();
+      } else {
+        const days = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+        batchType = days[new Date().getDay()];
+      }
+    } catch {
+      const days = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+      batchType = days[new Date().getDay()];
+    }
+
     const { generateSettlementBatch } = await import('@/lib/settlement-engine');
-    const result = await generateSettlementBatch('WEDNESDAY');
+    const result = await generateSettlementBatch(batchType);
 
     return NextResponse.json(result);
   } catch (error: any) {
     console.error('Admin generate settlement batch error:', error);
     return NextResponse.json({ error: error.message || 'Failed to generate batch' }, { status: 500 });
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const session = await requireRole(request, 'admin');
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { batchId, batch_type, batch_reference, status } = body;
+
+    if (!batchId) {
+      return NextResponse.json({ error: 'batchId is required' }, { status: 400 });
+    }
+
+    const updateFields: any = { updated_at: new Date().toISOString() };
+    if (batch_type) updateFields.batch_type = String(batch_type).toUpperCase();
+    if (batch_reference) updateFields.batch_reference = String(batch_reference).trim();
+    if (status) updateFields.status = String(status).toUpperCase();
+
+    const { data, error } = await supabaseAdmin
+      .from('settlement_batches')
+      .update(updateFields)
+      .eq('id', batchId)
+      .select()
+      .single();
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
+    return NextResponse.json({ 
+      success: true, 
+      message: 'Settlement batch updated successfully', 
+      batch: data 
+    });
+  } catch (error: any) {
+    console.error('Admin update batch error:', error);
+    return NextResponse.json({ error: error.message || 'Failed to update batch' }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const session = await requireRole(request, 'admin');
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const batchId = searchParams.get('batchId');
+
+    if (!batchId) {
+      return NextResponse.json({ error: 'batchId is required' }, { status: 400 });
+    }
+
+    // Check if batch exists and verify its status
+    const { data: batch, error: fetchErr } = await supabaseAdmin
+      .from('settlement_batches')
+      .select('id, status, batch_reference')
+      .eq('id', batchId)
+      .single();
+
+    if (fetchErr || !batch) {
+      return NextResponse.json({ error: 'Batch not found' }, { status: 404 });
+    }
+
+    if (batch.status === 'PAID') {
+      return NextResponse.json({ error: 'Cannot delete a completed/paid settlement batch.' }, { status: 400 });
+    }
+
+    // 1. Release ledger records back to PENDING and unset settlement_batch_id
+    await supabaseAdmin
+      .from('settlement_ledger')
+      .update({ settlement_batch_id: null, status: 'PENDING' })
+      .eq('settlement_batch_id', batchId);
+
+    // 2. Delete any created payouts for this batch
+    await supabaseAdmin
+      .from('payouts')
+      .delete()
+      .eq('settlement_batch_id', batchId);
+
+    // 3. Delete the settlement batch record
+    const { error: delErr } = await supabaseAdmin
+      .from('settlement_batches')
+      .delete()
+      .eq('id', batchId);
+
+    if (delErr) {
+      return NextResponse.json({ error: delErr.message }, { status: 400 });
+    }
+
+    return NextResponse.json({ 
+      success: true, 
+      message: `Batch ${batch.batch_reference} deleted successfully. Associated ledger items have been reverted to PENDING.` 
+    });
+  } catch (error: any) {
+    console.error('Admin delete batch error:', error);
+    return NextResponse.json({ error: error.message || 'Failed to delete batch' }, { status: 500 });
   }
 }
 

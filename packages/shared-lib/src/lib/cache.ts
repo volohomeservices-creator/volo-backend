@@ -31,9 +31,37 @@ class SimpleCache {
     this.cache.delete(key);
   }
 
+  deletePrefix(prefix: string): void {
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(prefix)) {
+        this.cache.delete(key);
+      }
+    }
+  }
+
   clear(): void {
     this.cache.clear();
   }
 }
 
-export const memoryCache = new SimpleCache();
+// Global persistence across Next.js dev reloads
+const globalForCache = globalThis as unknown as {
+  __globalMemoryCache?: SimpleCache;
+};
+
+export const memoryCache = globalForCache.__globalMemoryCache ?? new SimpleCache();
+if (process.env.NODE_ENV !== 'production') {
+  globalForCache.__globalMemoryCache = memoryCache;
+}
+
+export function getBannerCache<T = any>(key: string): T | null {
+  return memoryCache.get<T>(`banners:${key}`);
+}
+
+export function setBannerCache<T = any>(key: string, data: T, ttlSeconds = 300): void {
+  memoryCache.set(`banners:${key}`, data, ttlSeconds);
+}
+
+export function invalidateBannerCache(): void {
+  memoryCache.deletePrefix('banners:');
+}

@@ -27,7 +27,9 @@ export async function GET(
       .from('bookings')
       .select(`
         id, customer_id, worker_id, service_item_id, booking_type, payment_mode, status, 
-        address_line, lat, lng, scheduled_at, started_at, completed_at, total_amount, notes, otp, created_at, updated_at,
+        address_line, lat, lng, scheduled_at, started_at, completed_at, total_amount, 
+        service_amount, platform_fee, taxable_amount, tax_amount, tax_percentage, tax_type, pricing_config_version, platform_fee_percentage, platform_fee_type,
+        notes, otp, created_at, updated_at,
         service_items(id, category_id, name, description, base_price, estimated_mins, icon_url, is_active, service_categories(name)),
         workers(id, rating, total_jobs, current_lat, current_lng, status, users(full_name, avatar_url, phone))
       `);

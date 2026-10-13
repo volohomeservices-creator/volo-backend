@@ -7,6 +7,7 @@ import { startAssignment } from '@/lib/assignment-engine';
 import { dispatchNotification } from '@/lib/notification-dispatcher';
 import { createOnlinePayment } from '@/lib/payment-service';
 import { getBookingSlug } from '@/lib/booking-slug';
+import { calculateCustomerCharges } from '@/lib/pricing-engine';
 
 export const dynamic = 'force-dynamic';
 
@@ -79,11 +80,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Service item not found.' }, { status: 404 });
     }
 
-    // 2. Calculate totals
-    const basePrice = Number(item.base_price);
-    const serviceFee = basePrice * 0.10;
-    const tax = basePrice * 0.05;
-    const totalAmount = basePrice + serviceFee + tax;
+    // 2. Calculate authoritative pricing breakdown via central Pricing Engine
+    const pricingBreakdown = await calculateCustomerCharges({
+      serviceAmount: Number(item.base_price),
+      serviceId: item.id,
+      categoryId: item.category_id,
+    });
+
+    const basePrice = pricingBreakdown.serviceAmount;
+    const platformFee = pricingBreakdown.platformFee;
+    const tax = pricingBreakdown.taxAmount;
+    const totalAmount = pricingBreakdown.totalAmount;
 
     // 2.5 Promo Code Verification
     let discountAmount = 0;
@@ -208,6 +215,15 @@ export async function POST(request: Request) {
         lng,
         scheduled_at: scheduled_at ? new Date(scheduled_at).toISOString() : null,
         total_amount: finalTotalAmount,
+        service_amount: basePrice,
+        platform_fee: platformFee,
+        taxable_amount: pricingBreakdown.taxableAmount,
+        tax_amount: tax,
+        tax_percentage: pricingBreakdown.taxPercentage,
+        tax_type: pricingBreakdown.taxType,
+        pricing_config_version: pricingBreakdown.pricingConfigVersion,
+        platform_fee_percentage: pricingBreakdown.platformFeePercentage,
+        platform_fee_type: pricingBreakdown.platformFeeType,
         notes: notes || '',
         otp
       })

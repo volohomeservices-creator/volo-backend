@@ -84,6 +84,7 @@ export async function POST(request: Request) {
 
     // 2. Insert the review (using upsert/insert)
     // reviews table requires unique booking_id
+    const wouldRecommend = body.would_recommend !== undefined ? !!body.would_recommend : ratingNum >= 4;
     const { data: newReview, error: reviewErr } = await supabaseAdmin
       .from('reviews')
       .insert({
@@ -91,7 +92,11 @@ export async function POST(request: Request) {
         customer_id: customerId,
         worker_id: workerId,
         rating: ratingNum,
-        review_text: comment || ''
+        review_text: comment || '',
+        would_recommend: wouldRecommend,
+        is_approved: false,
+        approval_status: 'PENDING',
+        is_hidden: false
       })
       .select('*')
       .single();

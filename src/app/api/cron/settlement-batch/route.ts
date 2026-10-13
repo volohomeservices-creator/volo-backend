@@ -23,20 +23,17 @@ export async function POST(request: Request) {
     }
 
     // Determine batch type based on day of week or pass via payload
-    // According to specs, Wednesday (10AM) and Sunday (6PM).
     const now = new Date();
     // getDay() -> 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
-    const day = now.getDay();
+    const days = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+    let batchType: string = days[now.getDay()];
 
-    let batchType: 'WEDNESDAY' | 'SUNDAY' = 'SUNDAY';
-    if (day === 3) batchType = 'WEDNESDAY';
-
-    // If manual override was sent in body (for testing)
+    // If manual override was sent in body (for testing or webhook)
     try {
       const { data: body, errorResponse } = await validateBody(request, z.any());
-    if (errorResponse) return errorResponse;
-      if (body && body.batch_type && (body.batch_type === 'WEDNESDAY' || body.batch_type === 'SUNDAY')) {
-        batchType = body.batch_type;
+      if (errorResponse) return errorResponse;
+      if (body && body.batch_type) {
+        batchType = String(body.batch_type).toUpperCase();
       }
     } catch (e) {
       // Ignored: body is optional

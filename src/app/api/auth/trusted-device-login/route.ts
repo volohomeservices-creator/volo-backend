@@ -128,7 +128,8 @@ export async function POST(request: Request) {
         id: user.id,
         role: user.role,
         full_name: user.full_name || '',
-        phone: formattedPhone
+        phone: formattedPhone,
+        avatar_url: user.avatar_url || null
       },
       pinSet: !!user.pin_hash,
       redirectTo

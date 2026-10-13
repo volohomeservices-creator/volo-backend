@@ -3,6 +3,7 @@ import { validateBody } from '@/lib/zod-validator';
 import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth';
 import { supabaseAdmin as supabaseAdminOriginal } from '@/lib/supabase-server';
+import { invalidateBannerCache } from '@/lib/cache';
 const supabaseAdmin: any = supabaseAdminOriginal;
 
 export async function PUT(request: Request, props: { params: Promise<{ id: string }> }) {
@@ -11,25 +12,33 @@ export async function PUT(request: Request, props: { params: Promise<{ id: strin
     const { id } = await props.params;
     const { data: body, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
-    const { title, subtitle, discount_label, action_url, background_color, image_name, active } = body;
+    const { title, subtitle, discount_label, action_url, background_color, image_name, image_url, placement, button_text, active, image_position } = body;
+
+    const updatePayload: Record<string, any> = {
+      updated_at: new Date().toISOString()
+    };
+    if (title !== undefined) updatePayload.title = title;
+    if (subtitle !== undefined) updatePayload.subtitle = subtitle;
+    if (discount_label !== undefined) updatePayload.discount_label = discount_label;
+    if (action_url !== undefined) updatePayload.action_url = action_url;
+    if (background_color !== undefined) updatePayload.background_color = background_color;
+    if (image_name !== undefined) updatePayload.image_name = image_name;
+    if (image_url !== undefined) updatePayload.image_url = image_url;
+    if (placement !== undefined) updatePayload.placement = placement;
+    if (button_text !== undefined) updatePayload.button_text = button_text;
+    if (active !== undefined) updatePayload.active = active;
+    if (image_position !== undefined) updatePayload.image_position = image_position;
 
     const { data: updatedBanner, error } = await supabaseAdmin
       .from('mobile_banners')
-      .update({
-        title,
-        subtitle,
-        discount_label,
-        action_url,
-        background_color,
-        image_name,
-        active,
-        updated_at: new Date().toISOString()
-      })
+      .update(updatePayload)
       .eq('id', id)
       .select('*')
       .single();
 
     if (error) throw error;
+
+    invalidateBannerCache();
 
     return NextResponse.json({ success: true, banner: updatedBanner });
   } catch (error: any) {
@@ -52,6 +61,8 @@ export async function DELETE(request: Request, props: { params: Promise<{ id: st
       .eq('id', id);
 
     if (error) throw error;
+
+    invalidateBannerCache();
 
     return NextResponse.json({ success: true, message: 'Banner deleted successfully.' });
   } catch (error: any) {

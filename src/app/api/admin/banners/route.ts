@@ -3,6 +3,7 @@ import { validateBody } from '@/lib/zod-validator';
 import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth';
 import { supabaseAdmin as supabaseAdminOriginal } from '@/lib/supabase-server';
+import { invalidateBannerCache } from '@/lib/cache';
 const supabaseAdmin: any = supabaseAdminOriginal;
 
 export async function GET(request: Request) {
@@ -31,7 +32,7 @@ export async function POST(request: Request) {
     await requireRole(request, 'admin');
     const { data: body, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
-    const { title, subtitle, discount_label, action_url, background_color, image_name, image_url, placement, active } = body;
+    const { title, subtitle, discount_label, action_url, background_color, image_name, image_url, placement, active, button_text } = body;
 
     if (!title || !subtitle) {
       return NextResponse.json({ error: 'Title and subtitle are required.' }, { status: 400 });
@@ -47,13 +48,16 @@ export async function POST(request: Request) {
         background_color: background_color || '#3C01A7',
         image_name: image_name || 'home_services_banner.png',
         image_url: image_url || null,
-        placement: placement || 'PROMO',
+        placement: placement || 'HERO',
+        button_text: button_text || null,
         active: active !== undefined ? active : true
       })
       .select('*')
       .single();
 
     if (error) throw error;
+
+    invalidateBannerCache();
 
     return NextResponse.json({ success: true, banner: newBanner });
   } catch (error: any) {

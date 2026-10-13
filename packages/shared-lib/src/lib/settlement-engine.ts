@@ -61,7 +61,7 @@ export async function calculateWorkerSettlement(workerId: string) {
  * Triggered Wednesday 10 AM or Sunday 6 PM
  * Finds PENDING, creates Batch, links them, sets PROCESSING
  */
-export async function generateSettlementBatch(batchType: 'WEDNESDAY' | 'SUNDAY') {
+export async function generateSettlementBatch(batchType: string = 'WEDNESDAY') {
   try {
     // 1. Fetch all PENDING settlements
     const { data: pendingSettlements, error: fetchErr } = await supabaseAdmin

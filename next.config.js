@@ -18,6 +18,7 @@ const nextConfig = {
   webpack: (config, { isServer }) => {
     return config;
   },
+  turbopack: {},
 };
 
 module.exports = nextConfig;

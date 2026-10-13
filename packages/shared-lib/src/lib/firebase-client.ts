@@ -1,4 +1,3 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getAuth,
   signInWithPhoneNumber,
@@ -7,45 +6,62 @@ import {
   Auth,
   initializeRecaptchaConfig,
 } from 'firebase/auth';
+import { firebaseApp } from './firebase-app';
 
 // ---------------------------------------------------------------------------
 // 1. Firebase App + Auth initialization
 // ---------------------------------------------------------------------------
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-};
-
-const firebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const firebaseAuth = getAuth(firebaseApp);
 
 // ---------------------------------------------------------------------------
-// 2. Initialize reCAPTCHA Enterprise config
-//    Your Firebase Console has reCAPTCHA Enterprise in AUDIT mode with a
-//    web site key "volohome-phone-auth". This call tells the SDK to fetch
-//    that Enterprise config from the server so RecaptchaVerifier generates
-//    Enterprise tokens instead of standard ones.
+// 2. Initialize reCAPTCHA Enterprise config (lazy with timeout guard)
+//    Firebase Console has reCAPTCHA Enterprise with web site key "volohome-phone-auth".
+//    This is called lazily on-demand with a strict timeout guard to prevent
+//    unhandled "reCAPTCHA Timeout (b)" exceptions or hanging chunk loads.
 // ---------------------------------------------------------------------------
 let recaptchaConfigReady: Promise<void> | null = null;
 
-if (typeof window !== 'undefined') {
-  recaptchaConfigReady = initializeRecaptchaConfig(firebaseAuth)
-    .then(() => {
-      console.log('[Firebase] reCAPTCHA Enterprise config loaded successfully');
-    })
-    .catch((err) => {
-      console.warn('[Firebase] reCAPTCHA Enterprise config failed:', err);
-    });
-}
+export async function ensureRecaptchaConfig(): Promise<void> {
+  if (typeof window === 'undefined') return;
 
-console.log('[Firebase] Initialized:', {
-  projectId: firebaseConfig.projectId,
-  authDomain: firebaseConfig.authDomain,
-});
+  const isBypass =
+    process.env.NEXT_PUBLIC_ALLOW_RECAPTCHA_BYPASS === 'true' ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1';
+
+  if (isBypass) {
+    return;
+  }
+
+  if (!recaptchaConfigReady) {
+    recaptchaConfigReady = new Promise<void>((resolve) => {
+      const timeoutId = setTimeout(() => {
+        console.warn('[Firebase] reCAPTCHA Enterprise config timed out; proceeding with standard verifier');
+        resolve();
+      }, 3500);
+
+      try {
+        initializeRecaptchaConfig(firebaseAuth)
+          .then(() => {
+            clearTimeout(timeoutId);
+            console.log('[Firebase] reCAPTCHA Enterprise config loaded successfully');
+            resolve();
+          })
+          .catch((err) => {
+            clearTimeout(timeoutId);
+            console.warn('[Firebase] reCAPTCHA Enterprise config failed:', err);
+            resolve();
+          });
+      } catch (err) {
+        clearTimeout(timeoutId);
+        console.warn('[Firebase] initializeRecaptchaConfig invocation error:', err);
+        resolve();
+      }
+    });
+  }
+
+  return recaptchaConfigReady;
+}
 
 export { firebaseApp, firebaseAuth };
 
@@ -53,7 +69,6 @@ export { firebaseApp, firebaseAuth };
 // 3. RecaptchaManager — MINIMAL wrapper
 //    CRITICAL: Do NOT purge window.grecaptcha, scripts, or iframes.
 //    Firebase manages its own reCAPTCHA Enterprise lifecycle internally.
-//    Destroying those objects was the root cause of auth/invalid-app-credential.
 // ---------------------------------------------------------------------------
 class RecaptchaManager {
   private static instance: RecaptchaVerifier | null = null;
@@ -65,10 +80,8 @@ class RecaptchaManager {
       throw new Error('Client only');
     }
 
-    // Wait for Enterprise config to be loaded before creating verifier
-    if (recaptchaConfigReady) {
-      await recaptchaConfigReady;
-    }
+    // Wait for Enterprise config (lazy with timeout safety) before creating verifier
+    await ensureRecaptchaConfig();
 
     // If we already have a valid instance, return it
     if (this.instance) {
@@ -122,10 +135,7 @@ class RecaptchaManager {
 // ---------------------------------------------------------------------------
 
 export async function initializePhoneAuth(): Promise<void> {
-  // Ensure Enterprise config is loaded
-  if (recaptchaConfigReady) {
-    await recaptchaConfigReady;
-  }
+  await ensureRecaptchaConfig();
 }
 
 export async function cleanupPhoneAuth(): Promise<void> {
@@ -178,7 +188,6 @@ export async function verifyOtp(
 // 5. Legacy exports
 // ---------------------------------------------------------------------------
 export function getOrCreateRecaptchaVerifier(): RecaptchaVerifier {
-  // This is now async internally, but kept for backward compat
   return RecaptchaManager.getOrCreate(firebaseAuth) as any;
 }
 

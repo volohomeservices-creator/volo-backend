@@ -32,7 +32,7 @@ export async function GET(request: Request) {
       notificationsRes,
       liveLocRes
     ] = await Promise.all([
-      supabaseAdmin.from('workers').select('status, kyc_status, current_lat, current_lng').eq('id', workerId).single(),
+      supabaseAdmin.from('workers').select('status, kyc_status, current_lat, current_lng, rating').eq('id', workerId).single(),
       supabaseAdmin.from('worker_wallets').select('balance').eq('worker_id', workerId).maybeSingle(),
       supabaseAdmin.from('worker_profiles').select('address, city, state, skills, experience, languages, bio').eq('worker_id', workerId).maybeSingle(),
       // Fetch only recent/active bookings for the dashboard instead of all-time history
@@ -189,10 +189,20 @@ export async function GET(request: Request) {
       recentNotifications: notifications,
       activeJob: formattedActiveJob,
       broadcastJobs,
+      user: {
+        id: workerId,
+        full_name: user?.full_name || '',
+        avatar_url: user?.avatar_url || null,
+        email: user?.email || '',
+      },
+      worker: {
+        id: workerId,
+        rating: Number(worker.rating ?? 5.0),
+      },
       stats: {
         today_earnings: Math.round(today_earnings),
         completed_today,
-        rating: 4.8
+        rating: Number(worker.rating ?? 5.0)
       }
     }, { headers: cacheHeaders });
   } catch (error: any) {

@@ -229,7 +229,8 @@ export async function POST(request: Request) {
         id: user_id,
         role,
         full_name: current_full_name,
-        phone
+        phone,
+        avatar_url: existingUser?.avatar_url || null
       },
       pinSet: !!existingPinHash,
       promptPinSetup: !existingPinHash

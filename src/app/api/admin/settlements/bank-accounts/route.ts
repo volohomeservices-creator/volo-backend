@@ -58,12 +58,56 @@ export async function POST(request: Request) {
 
     const { data: account, error: updateErr } = await supabaseAdmin
       .from('worker_bank_accounts')
-      .update({ is_verified: isVerified, updated_at: new Date().toISOString() })
+      .update({ 
+        is_verified: isVerified,
+        verification_status: isVerified ? 'VERIFIED' : 'FAILED',
+        is_primary: isVerified ? true : false,
+        updated_at: new Date().toISOString() 
+      })
       .eq('id', accountId)
       .select('worker_id')
       .single();
 
     if (updateErr || !account) throw updateErr;
+
+    // Single Primary Rule: If this account is verified as primary, set all other accounts of this worker to non-primary
+    if (isVerified) {
+      await supabaseAdmin
+        .from('worker_bank_accounts')
+        .update({ is_primary: false })
+        .eq('worker_id', account.worker_id)
+        .neq('id', accountId);
+    }
+
+    if (isVerified) {
+      try {
+        const { DefaultPayoutProvider } = await import('@/lib/payouts/payout-provider');
+        const provider = new DefaultPayoutProvider();
+        const { data: fullAcc } = await supabaseAdmin
+          .from('worker_bank_accounts')
+          .select('*, workers(users(full_name, email, phone))')
+          .eq('id', accountId)
+          .single();
+
+        if (fullAcc && !fullAcc.provider_fund_account_id) {
+          const userName = fullAcc.workers?.users?.full_name || fullAcc.account_holder_name;
+          const userEmail = fullAcc.workers?.users?.email || '';
+          const userPhone = fullAcc.workers?.users?.phone || '';
+          const contactId = await provider.createContact(fullAcc.worker_id, userName, userEmail, userPhone);
+          const fundAccountId = await provider.createFundAccount(contactId, fullAcc);
+          await supabaseAdmin
+            .from('worker_bank_accounts')
+            .update({
+              provider_contact_id: contactId,
+              provider_fund_account_id: fundAccountId,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', accountId);
+        }
+      } catch (linkErr: any) {
+        console.warn('[Razorpay Route] Auto-linking account on verification notice:', linkErr.message);
+      }
+    }
 
     await logAuditAction({
       admin_id: session.user_id,

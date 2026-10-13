@@ -256,7 +256,8 @@ export async function POST(request: Request) {
         id: user_id,
         role,
         full_name: current_full_name,
-        phone: formattedPhone
+        phone: formattedPhone,
+        avatar_url: existingUser?.avatar_url || null
       },
       deviceToken,
       pinSet: !!existing_pin_hash,

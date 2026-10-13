@@ -8,9 +8,14 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
-    const session = await requireRole(request, 'customer');
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    let customerId: string | undefined;
+    try {
+      const session = await requireRole(request, 'customer');
+      if (session) {
+        customerId = session.user_id;
+      }
+    } catch {
+      // Proceed with cryptographic Razorpay signature check
     }
 
     const body = await request.json();
@@ -23,7 +28,7 @@ export async function POST(request: Request) {
     }
 
     const result = await captureOnlinePayment({
-      customerId: session.user_id,
+      customerId: customerId || '',
       orderId,
       paymentId,
       signature,
@@ -37,12 +42,14 @@ export async function POST(request: Request) {
       startAssignment(result.bookingId).catch((err) => {
         console.error('Assignment start after payment verify failed:', err);
       });
-      await dispatchNotification({
-        userId: session.user_id,
-        type: 'BOOKING_CREATED',
-        title: 'Payment received',
-        body: 'Your payment is confirmed. We are assigning a technician.',
-      });
+      if (customerId) {
+        await dispatchNotification({
+          userId: customerId,
+          type: 'BOOKING_CREATED',
+          title: 'Payment received',
+          body: 'Your payment is confirmed. We are assigning a technician.',
+        });
+      }
     }
 
     return NextResponse.json({ success: true, bookingId: result.bookingId });

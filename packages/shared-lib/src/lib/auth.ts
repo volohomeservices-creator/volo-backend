@@ -51,3 +51,6 @@ export async function requireRole(
   }
   return session;
 }
+
+export const getSession = getSessionFromRequest;
+

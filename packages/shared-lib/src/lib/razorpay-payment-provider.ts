@@ -62,6 +62,11 @@ export class RazorpayPaymentProvider implements IPaymentProvider {
       status: refund.status,
     };
   }
+
+  async getOrder(orderId: string): Promise<any> {
+    const client = getClient();
+    return await client.orders.fetch(orderId);
+  }
 }
 
 export const paymentProvider = new RazorpayPaymentProvider();
