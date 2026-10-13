@@ -10,7 +10,7 @@ export async function logAuditAction({
   metadata,
   ip_address,
 }: {
-  admin_id: string;
+  admin_id?: string | null;
   action: AuditAction;
   target_type?: string | null;
   target_id?: string | null;
@@ -19,7 +19,7 @@ export async function logAuditAction({
 }) {
   try {
     const { error } = await supabaseAdmin.from('audit_logs').insert({
-      admin_id,
+      admin_id: admin_id || null,
       action,
       target_type: target_type || null,
       target_id: target_id || null,

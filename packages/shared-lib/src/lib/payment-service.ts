@@ -121,8 +121,10 @@ export async function captureOnlinePayment(input: {
       response: { order_id: input.orderId, payment_id: input.paymentId },
     });
 
+    const auditUserId = input.customerId || existing.customer_id || 'system';
+
     await logAuditAction({
-      admin_id: input.customerId,
+      admin_id: auditUserId,
       action: AuditAction.PAYMENT_CAPTURED,
       target_type: 'payment',
       target_id: updated.id,
