@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
   const amount = searchParams.get('amount') || '0';
   const currency = searchParams.get('currency') || 'INR';
   const displayAmount = searchParams.get('display_amount') || '0';
+  const returnUrl = searchParams.get('return_url') || '';
 
   if (!orderId || !keyId) {
     return new NextResponse('Missing required payment parameters.', { status: 400 });
@@ -25,7 +26,7 @@ export async function GET(request: NextRequest) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Add Funds | VOLO Captain Wallet</title>
-  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <script src="https://checkout.razorpay.com/v1/checkout.js" onerror="onScriptLoadError()"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -146,10 +147,31 @@ export async function GET(request: NextRequest) {
 
     <button id="pay-btn" class="btn" onclick="openPayment()">Pay Now — Add Funds</button>
     <div id="status" class="status-msg status-info"></div>
+
+    <form id="rzp-fallback-form" method="POST" action="https://api.razorpay.com/v1/checkout/embedded" style="display:none;">
+      <input type="hidden" name="key_id" value="${keyId}" />
+      <input type="hidden" name="order_id" value="${orderId}" />
+      <input type="hidden" name="name" value="VOLO Captain Wallet" />
+      <input type="hidden" name="description" value="Wallet Recharge" />
+    </form>
   </div>
 
   <script>
+    var scriptBlocked = false;
+    function onScriptLoadError() {
+      scriptBlocked = true;
+    }
+
     function openPayment() {
+      var statusEl = document.getElementById('status');
+
+      if (typeof Razorpay === 'undefined' || scriptBlocked) {
+        statusEl.className = 'status-msg status-info';
+        statusEl.innerText = 'Redirecting to Razorpay Secure Gateway...';
+        document.getElementById('rzp-fallback-form').submit();
+        return;
+      }
+
       var options = {
         key: "${keyId}",
         amount: "${amount}",
@@ -159,43 +181,37 @@ export async function GET(request: NextRequest) {
         order_id: "${orderId}",
         theme: { color: "#10B981" },
         handler: async function(response) {
-          var statusEl = document.getElementById('status');
           statusEl.className = 'status-msg status-info';
           statusEl.innerText = 'Verifying payment...';
           try {
-            var verifyRes = await fetch('/api/worker/wallet-topup/verify', {
+            await fetch('/api/worker/wallet-topup/verify', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(response)
             });
-            var data = await verifyRes.json();
-            if (data.success) {
-              statusEl.className = 'status-msg status-success';
-              statusEl.innerText = '✅ Wallet funded successfully! New balance: ₹' + (data.balance || 0).toFixed(2);
-              document.getElementById('pay-btn').style.display = 'none';
-              // Notify parent window / WebView
-              if (window.ReactNativeWebView) {
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  type: 'WALLET_TOPUP_SUCCESS',
-                  balance: data.balance,
-                  amount: data.amount,
-                }));
-              } else if (window.opener) {
-                window.opener.postMessage({ type: 'WALLET_TOPUP_SUCCESS', balance: data.balance }, '*');
-                setTimeout(function() { window.close(); }, 1500);
-              }
-            } else {
-              statusEl.className = 'status-msg status-error';
-              statusEl.innerText = 'Verification issue: ' + (data.error || 'Please contact support.');
-            }
           } catch(err) {
-            statusEl.className = 'status-msg status-error';
-            statusEl.innerText = 'Payment received! Please refresh your wallet.';
+            console.error('Verify error:', err);
+          }
+
+          var targetUrl = "${returnUrl}";
+          if (targetUrl) {
+            statusEl.className = 'status-msg status-success';
+            statusEl.innerText = 'Wallet funded successfully! Returning...';
+            var redirectUri = targetUrl + (targetUrl.indexOf('?') === -1 ? '?' : '&') +
+              'razorpay_order_id=' + encodeURIComponent(response.razorpay_order_id) +
+              '&razorpay_payment_id=' + encodeURIComponent(response.razorpay_payment_id) +
+              '&razorpay_signature=' + encodeURIComponent(response.razorpay_signature);
+            window.location.href = redirectUri;
+          } else {
+            statusEl.className = 'status-msg status-success';
+            statusEl.innerText = 'Wallet funded! Please return to app.';
+            setTimeout(function() {
+              window.location.href = 'volo://wallet-topup-callback?razorpay_order_id=' + encodeURIComponent(response.razorpay_order_id);
+            }, 800);
           }
         },
         modal: {
           ondismiss: function() {
-            var statusEl = document.getElementById('status');
             statusEl.className = 'status-msg status-error';
             statusEl.innerText = 'Payment window was closed.';
           }
@@ -206,12 +222,16 @@ export async function GET(request: NextRequest) {
         var rzp = new Razorpay(options);
         rzp.open();
       } catch (err) {
-        document.getElementById('status').innerText = 'Could not open Razorpay: ' + err.message;
+        document.getElementById('rzp-fallback-form').submit();
       }
     }
 
     window.addEventListener('load', function() {
-      setTimeout(openPayment, 400);
+      setTimeout(function() {
+        if (typeof Razorpay !== 'undefined') {
+          openPayment();
+        }
+      }, 500);
     });
   </script>
 </body>
