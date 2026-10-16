@@ -197,7 +197,8 @@ export class CashfreePayoutProvider implements PayoutProvider {
     fundAccountId: string,
     amount: number,
     referenceId: string,
-    bankAccountDetails?: any
+    bankAccountDetails?: any,
+    preferredMode: 'upi' | 'banktransfer' | 'auto' = 'upi'
   ): Promise<{ providerPayoutId: string; status: string; utr?: string | null; isLive: boolean }> {
     const isLive = this.isLiveEnabled();
 
@@ -249,8 +250,9 @@ export class CashfreePayoutProvider implements PayoutProvider {
     ).trim();
     const isUpiValid = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(rawUpi);
 
+    const forceBank = preferredMode === 'banktransfer';
     let payload: any;
-    if (isUpiValid) {
+    if (isUpiValid && !forceBank) {
       console.log(`[Cashfree Payouts] Executing transfer via UPI mode to VPA: ${rawUpi}`);
       payload = {
         transfer_id: transferId,

@@ -87,6 +87,32 @@ export async function GET(request: Request) {
       value: Number(value.toFixed(2))
     }));
 
+    // Compute all period totals for summary chips
+    const startOfToday = startOfDay(now);
+    const startOfThisWeek = startOfWeek(now, { weekStartsOn: 1 });
+    const startOfThisMonth = startOfMonth(now);
+
+    let todayGross = 0;
+    let weekGross = 0;
+    let monthGross = 0;
+    let allTimeGross = 0;
+
+    (bookings || []).forEach((b: any) => {
+      const amt = Number(b.total_amount || 0);
+      allTimeGross += amt;
+      if (b.completed_at) {
+        const d = parseISO(b.completed_at);
+        if (d >= startOfToday) todayGross += amt;
+        if (d >= startOfThisWeek) weekGross += amt;
+        if (d >= startOfThisMonth) monthGross += amt;
+      }
+    });
+
+    const todayEarnings = Number((todayGross * 0.85).toFixed(2));
+    const weekEarnings = Number((weekGross * 0.85).toFixed(2));
+    const monthEarnings = Number((monthGross * 0.85).toFixed(2));
+    const allTimeEarnings = Number((allTimeGross * 0.85).toFixed(2));
+
     // Fetch actual database wallet balance for the worker
     let { data: wallet } = await supabaseAdmin
       .from('worker_wallets')
@@ -104,7 +130,7 @@ export async function GET(request: Request) {
       wallet = newWallet;
     }
 
-    // Fetch last 20 wallet transactions
+    // Fetch last 20 wallet transactions or fallback to completed bookings
     const { data: txns } = await supabaseAdmin
       .from('wallet_transactions')
       .select('*')
@@ -112,9 +138,32 @@ export async function GET(request: Request) {
       .order('created_at', { ascending: false })
       .limit(20);
 
+    const { data: recentCompletedBookings } = await supabaseAdmin
+      .from('bookings')
+      .select('id, total_amount, completed_at, service_items(name)')
+      .eq('worker_id', workerId)
+      .eq('status', 'COMPLETED')
+      .order('completed_at', { ascending: false })
+      .limit(10);
+
+    const bookingTxns = (recentCompletedBookings || []).map((b: any) => ({
+      id: b.id,
+      title: b.service_items?.name || 'Completed Service',
+      amount: Number((b.total_amount * 0.85).toFixed(2)),
+      created_at: b.completed_at,
+      status: 'Paid',
+      type: 'SERVICE_PAYOUT'
+    }));
+
+    const finalTransactions = txns && txns.length > 0 ? txns : bookingTxns;
+
     return NextResponse.json({
       summary: {
         total: totalEarnings,
+        today: todayEarnings,
+        week: weekEarnings,
+        month: monthEarnings,
+        allTime: allTimeEarnings,
         jobsCount: completedJobsCount,
         average: averagePerJob,
         decay: false,
@@ -125,7 +174,7 @@ export async function GET(request: Request) {
         balance: wallet ? Number(wallet.balance) : 0,
         minimum_balance: wallet ? Math.abs(Number(wallet.minimum_balance)) : 500
       },
-      transactions: txns || []
+      transactions: finalTransactions
     }, { headers: cacheHeaders });
   } catch (error: any) {
     console.error('Error fetching worker earnings:', error.message || error);

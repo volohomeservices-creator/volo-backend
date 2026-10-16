@@ -83,7 +83,11 @@ export class PayoutService {
   /**
    * Executes all pending/ready payouts for a given settlement batch via Razorpay Route
    */
-  static async executePayoutsForBatch(batchId: string, adminId: string) {
+  static async executePayoutsForBatch(
+    batchId: string,
+    adminId: string,
+    options?: { preferredMode?: 'upi' | 'banktransfer' | 'auto' }
+  ) {
     const { data: batch, error: batchErr } = await supabaseAdmin
       .from('settlement_batches')
       .select('*')
@@ -198,9 +202,17 @@ export class PayoutService {
             .eq('id', bankAccount.id);
         }
 
-        const transferResult = await this.getProvider().createPayout(fundAccountId, Number(payout.amount), payout.id, bankAccount);
+        const preferredMode = options?.preferredMode || 'upi';
+        const transferResult = await this.getProvider().createPayout(
+          fundAccountId, 
+          Number(payout.amount), 
+          payout.id, 
+          bankAccount,
+          preferredMode
+        );
         const isSuccess = transferResult.status === 'processed';
         const finalStatus = isSuccess ? PayoutStatus.PAID : PayoutStatus.PROCESSING;
+        const recordedMode = (preferredMode === 'banktransfer' || !bankAccount?.upi_id) ? 'banktransfer' : 'upi';
 
         await supabaseAdmin
           .from('payouts')
@@ -210,6 +222,7 @@ export class PayoutService {
             provider_status: transferResult.status,
             utr_number: transferResult.utr || null,
             status: finalStatus,
+            transfer_mode: recordedMode,
             processed_at: isSuccess ? new Date().toISOString() : null,
             execution_lock_until: null,
             updated_at: new Date().toISOString()

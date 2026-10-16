@@ -11,6 +11,21 @@ export async function GET(request: Request) {
 
     const earnings = await calculateWorkerSettlement(session.user_id);
 
+    const [workerWalletRes, userWalletRes] = await Promise.all([
+      supabaseAdmin
+        .from('worker_wallets')
+        .select('balance')
+        .eq('worker_id', session.user_id)
+        .maybeSingle(),
+      supabaseAdmin
+        .from('wallets')
+        .select('balance')
+        .eq('user_id', session.user_id)
+        .maybeSingle()
+    ]);
+
+    const walletBalance = Number(workerWalletRes.data?.balance ?? userWalletRes.data?.balance ?? 0);
+
     const { data: history } = await supabaseAdmin
       .from('settlement_ledger')
       .select('*, settlement_batches(batch_reference, status)')
@@ -19,6 +34,7 @@ export async function GET(request: Request) {
       .limit(20);
 
     return NextResponse.json({
+      balance: walletBalance,
       earnings: earnings || {
         gross_earnings: 0,
         commission: 0,

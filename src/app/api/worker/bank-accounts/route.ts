@@ -16,7 +16,7 @@ export async function GET(request: Request) {
     // Fetch the worker's primary bank account
     let { data, error } = await supabaseAdmin
       .from('worker_bank_accounts')
-      .select('id, worker_id, account_holder_name, bank_name, branch, account_type, account_last_four, ifsc_code, is_verified, verification_status, is_primary, created_at, updated_at')
+      .select('id, worker_id, account_holder_name, bank_name, branch, account_type, account_last_four, ifsc_code, upi_id, is_verified, verification_status, is_primary, created_at, updated_at')
       .eq('worker_id', session.user_id)
       .eq('is_primary', true)
       .maybeSingle();
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
     if (!data) {
       const { data: fallback } = await supabaseAdmin
         .from('worker_bank_accounts')
-        .select('id, worker_id, account_holder_name, bank_name, branch, account_type, account_last_four, ifsc_code, is_verified, verification_status, is_primary, created_at, updated_at')
+        .select('id, worker_id, account_holder_name, bank_name, branch, account_type, account_last_four, ifsc_code, upi_id, is_verified, verification_status, is_primary, created_at, updated_at')
         .eq('worker_id', session.user_id)
         .order('created_at', { ascending: false })
         .limit(1)
