@@ -164,7 +164,9 @@ export async function markReadyForPayout(batchId: string, adminId: string) {
       .single();
 
     if (fetchErr || !batch) throw new Error('Batch not found');
-    if (batch.status !== 'PROCESSING') throw new Error(`Cannot mark ${batch.status} as READY_FOR_PAYOUT`);
+    if (batch.status !== 'PROCESSING' && batch.status !== 'FAILED' && batch.status !== 'REJECTED') {
+      throw new Error(`Cannot mark ${batch.status} as READY_FOR_PAYOUT`);
+    }
 
     // Update Batch
     const { error: batchUpdateErr } = await supabaseAdmin

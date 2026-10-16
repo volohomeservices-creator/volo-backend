@@ -16,6 +16,14 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'batchId is required' }, { status: 400 });
     }
 
+    // Auto-reconcile active payouts against provider before returning status
+    try {
+      const { PayoutService } = await import('@/lib/payouts/payout-service');
+      await PayoutService.reconcilePayouts();
+    } catch (recErr) {
+      console.warn('[PayoutStatus] Live reconcile notice:', recErr);
+    }
+
     const { data: payouts, error } = await supabaseAdmin
       .from('payouts')
       .select(`
@@ -67,15 +75,26 @@ export async function POST(request: Request) {
         status: 'READY_FOR_PAYOUT',
         failure_reason: null,
         failure_code: null,
+        execution_lock_until: null,
         updated_at: new Date().toISOString()
       })
       .eq('id', payoutId)
-      .eq('status', 'FAILED')
       .select()
       .single();
 
     if (error || !data) {
-      return NextResponse.json({ error: error?.message || 'Payout not found or not in FAILED status' }, { status: 400 });
+      return NextResponse.json({ error: error?.message || 'Payout not found' }, { status: 400 });
+    }
+
+    // Also update parent batch to READY_FOR_PAYOUT
+    if (data.settlement_batch_id) {
+      await supabaseAdmin
+        .from('settlement_batches')
+        .update({
+          status: 'READY_FOR_PAYOUT',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', data.settlement_batch_id);
     }
 
     return NextResponse.json({ success: true, message: 'Payout reset to READY_FOR_PAYOUT for retry' });

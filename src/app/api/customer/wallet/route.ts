@@ -77,8 +77,22 @@ export async function POST(request: Request) {
     if (errorResponse) return errorResponse;
     const amount = Number(body.amount);
 
-    if (isNaN(amount) || amount <= 0) {
-      return NextResponse.json({ error: 'Invalid amount' }, { status: 400 });
+    // Fetch dynamic limits from platform_settings
+    const { data: settingRows } = await supabaseAdmin
+      .from('platform_settings')
+      .select('key, value')
+      .in('key', ['min_customer_wallet_topup', 'max_customer_wallet_balance']);
+
+    const settingsMap: Record<string, number> = {};
+    (settingRows || []).forEach((r: any) => {
+      settingsMap[r.key] = Number(r.value);
+    });
+
+    const minTopup = settingsMap['min_customer_wallet_topup'] || 100;
+    const maxBalance = settingsMap['max_customer_wallet_balance'] || 10000;
+
+    if (isNaN(amount) || amount < minTopup) {
+      return NextResponse.json({ error: `Minimum top-up amount is ₹${minTopup}.` }, { status: 400 });
     }
 
     // 1. Get or create wallet
@@ -102,6 +116,10 @@ export async function POST(request: Request) {
     }
 
     const newBalance = Number(wallet.balance) + amount;
+
+    if (newBalance > maxBalance) {
+      return NextResponse.json({ error: `Wallet balance cannot exceed ₹${maxBalance}.` }, { status: 400 });
+    }
 
     // Update balance
     const { error: updateErr } = await supabaseAdmin

@@ -12,14 +12,16 @@ export async function POST(request: Request) {
 
     const { data: body, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
-    const { batchId } = body;
+    const { batchId, preferredMode } = body;
 
     if (!batchId) {
       return NextResponse.json({ error: 'Missing batchId' }, { status: 400 });
     }
 
     const { PayoutService } = await import('@/lib/payouts/payout-service');
-    const result = await PayoutService.executePayoutsForBatch(batchId, session.user_id);
+    const result = await PayoutService.executePayoutsForBatch(batchId, session.user_id, {
+      preferredMode: preferredMode === 'banktransfer' ? 'banktransfer' : 'upi'
+    });
 
     return NextResponse.json(result);
   } catch (error: any) {

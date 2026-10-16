@@ -40,12 +40,21 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404, headers: cacheHeaders });
     }
 
-    // Fetch workers details (dob, worker_id_code, kyc_status)
-    const { data: worker } = await supabaseAdmin
-      .from('workers')
-      .select('dob, worker_id_code, kyc_status')
-      .eq('id', workerId)
-      .single();
+    // Fetch workers details (dob, worker_id_code, kyc_status, rating, status)
+    const [workerRes, reviewsRes] = await Promise.all([
+      supabaseAdmin
+        .from('workers')
+        .select('dob, worker_id_code, kyc_status, rating, status')
+        .eq('id', workerId)
+        .single(),
+      supabaseAdmin
+        .from('reviews')
+        .select('id', { count: 'exact', head: true })
+        .eq('worker_id', workerId)
+    ]);
+
+    const worker = workerRes.data;
+    const reviewsCount = reviewsRes.count ?? 0;
 
     // Fetch profile details
     let { data: profile } = await supabaseAdmin
@@ -58,7 +67,7 @@ export async function GET(request: Request) {
     if (!profile) {
       const { data: newProfile } = await supabaseAdmin
         .from('worker_profiles')
-        .insert({ worker_id: workerId, city: 'Bangalore', state: 'Karnataka' })
+        .insert({ worker_id: workerId, city: 'Hyderabad', state: 'Telangana' })
         .select()
         .single();
       profile = newProfile || {};
@@ -79,7 +88,10 @@ export async function GET(request: Request) {
       profileCompletion: getCompletionPercentage(user, profile),
       dob: worker?.dob || '',
       worker_id_code: worker?.worker_id_code || '',
-      kyc_status: worker?.kyc_status || 'PENDING'
+      kyc_status: worker?.kyc_status || 'PENDING',
+      status: worker?.status || 'OFFLINE',
+      rating: Number(worker?.rating ?? 5.0),
+      reviews_count: reviewsCount
     }, { headers: cacheHeaders });
   } catch (error: any) {
     console.error('Error fetching worker profile:', error.message || error);

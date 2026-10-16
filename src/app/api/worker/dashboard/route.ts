@@ -27,22 +27,15 @@ export async function GET(request: Request) {
       workerRes,
       walletRes,
       profileRes,
-      recentBookingsRes,
-      totalCompletedRes,
+      allBookingsRes,
       notificationsRes,
       liveLocRes
     ] = await Promise.all([
       supabaseAdmin.from('workers').select('status, kyc_status, current_lat, current_lng, rating').eq('id', workerId).single(),
       supabaseAdmin.from('worker_wallets').select('balance').eq('worker_id', workerId).maybeSingle(),
       supabaseAdmin.from('worker_profiles').select('address, city, state, skills, experience, languages, bio').eq('worker_id', workerId).maybeSingle(),
-      // Fetch only recent/active bookings for the dashboard instead of all-time history
       supabaseAdmin.from('bookings').select('id, status, scheduled_at, created_at, completed_at, total_amount')
-        .eq('worker_id', workerId)
-        .gte('created_at', thirtyDaysAgo),
-      // Use a count query for all-time stats
-      supabaseAdmin.from('bookings').select('id', { count: 'exact', head: true })
-        .eq('worker_id', workerId)
-        .eq('status', 'COMPLETED'),
+        .eq('worker_id', workerId),
       supabaseAdmin.from('notifications').select('id, user_id, title, body, created_at, is_read, data').eq('user_id', workerId).order('created_at', { ascending: false }).limit(50),
       supabaseAdmin.from('worker_live_locations').select('latitude, longitude').eq('worker_id', workerId).maybeSingle()
     ]);
@@ -66,8 +59,11 @@ export async function GET(request: Request) {
 
     const worker = workerRes.data;
     const profile = (profileRes.data || {}) as any;
-    const bookings = recentBookingsRes.data || [];
-    const totalCompletedCount = totalCompletedRes.count || 0;
+    const bookings = allBookingsRes.data || [];
+    const totalBookingsCount = bookings.length;
+    const completedJobsCount = bookings.filter(b => b.status === 'COMPLETED').length;
+    const cancelledJobsCount = bookings.filter(b => b.status === 'CANCELLED' || b.status === 'REJECTED').length;
+    const inProgressJobsCount = bookings.filter(b => ['IN_PROGRESS', 'ON_THE_WAY', 'ARRIVED', 'WORKER_ACCEPTED'].includes(b.status)).length;
     const notificationsRaw = notificationsRes.data || [];
     const filteredNotifications = await filterRealNotifications(notificationsRaw, workerId);
     const notifications = filteredNotifications.slice(0, 5);
@@ -181,11 +177,14 @@ export async function GET(request: Request) {
       kycStatus: worker.kyc_status,
       current_lat,
       current_lng,
+      totalBookingsCount,
       todayJobsCount: todayJobs.length,
-      completedJobsCount: totalCompletedCount,
-      pendingJobsCount: pendingJobs.length,
+      completedJobsCount,
+      cancelledJobsCount,
+      inProgressJobsCount,
       upcomingJobs: upcomingJobs.slice(0, 5),
       commissionWalletBalance: Number(walletRes.data?.balance || 0),
+      walletBalance: Number(walletRes.data?.balance || 0),
       recentNotifications: notifications,
       activeJob: formattedActiveJob,
       broadcastJobs,
@@ -202,7 +201,10 @@ export async function GET(request: Request) {
       stats: {
         today_earnings: Math.round(today_earnings),
         completed_today,
-        rating: Number(worker.rating ?? 5.0)
+        rating: Number(worker.rating ?? 5.0),
+        total_bookings: totalBookingsCount,
+        completed_jobs: completedJobsCount,
+        cancelled_jobs: cancelledJobsCount
       }
     }, { headers: cacheHeaders });
   } catch (error: any) {

@@ -50,7 +50,7 @@ export interface PayoutProviderConfig {
 export interface PayoutProvider {
   createContact(workerId: string, name: string, email: string, phone: string): Promise<string>;
   createFundAccount(contactId: string, bankAccountDetails: any): Promise<string>;
-  createPayout(fundAccountId: string, amount: number, referenceId: string, bankAccountDetails?: any): Promise<{ providerPayoutId: string; status: string; utr?: string | null; isLive?: boolean }>;
+  createPayout(fundAccountId: string, amount: number, referenceId: string, bankAccountDetails?: any, preferredMode?: 'upi' | 'banktransfer' | 'auto'): Promise<{ providerPayoutId: string; status: string; utr?: string | null; isLive?: boolean; failureReason?: string | null }>;
   fetchPayoutStatus(providerPayoutId: string): Promise<{ status: string; utr: string | null; failureReason: string | null }>;
   verifyBankAccount(bankAccountDetails: any): Promise<boolean>;
 }

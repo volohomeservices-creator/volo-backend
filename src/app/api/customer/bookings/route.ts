@@ -163,6 +163,31 @@ export async function POST(request: Request) {
 
     const finalTotalAmount = Math.max(0, totalAmount - discountAmount);
 
+    // 2.7 Verify Payment Mode against dynamic Admin Platform Settings
+    const { data: paymentSettings } = await supabaseAdmin
+      .from('platform_settings')
+      .select('key, value')
+      .in('key', ['enable_cod_payment', 'enable_online_payment', 'enable_wallet_payment']);
+
+    const paymentConfigMap: Record<string, boolean> = {
+      enable_cod_payment: true,
+      enable_online_payment: true,
+      enable_wallet_payment: true,
+    };
+    (paymentSettings || []).forEach((s: any) => {
+      paymentConfigMap[s.key] = s.value !== 'false';
+    });
+
+    if (payment_mode === 'COD' && !paymentConfigMap.enable_cod_payment) {
+      return NextResponse.json({ error: 'Cash on Delivery is currently disabled by administrator. Please choose Online Pay or Volo Wallet.' }, { status: 400 });
+    }
+    if (payment_mode === 'ONLINE' && !paymentConfigMap.enable_online_payment) {
+      return NextResponse.json({ error: 'Online payment is currently disabled by administrator. Please choose Cash on Delivery or Volo Wallet.' }, { status: 400 });
+    }
+    if (payment_mode === 'WALLET' && !paymentConfigMap.enable_wallet_payment) {
+      return NextResponse.json({ error: 'Volo Wallet payment is currently disabled by administrator. Please choose Cash or Online Pay.' }, { status: 400 });
+    }
+
     // 2.8 Wallet Balance Verification & Lock
     let wallet: any = null;
     if (payment_mode === 'WALLET') {

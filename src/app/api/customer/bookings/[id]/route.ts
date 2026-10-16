@@ -166,7 +166,7 @@ export async function PATCH(
 
       updates.status = 'CANCELLED';
 
-      if (booking.payment_mode === 'ONLINE') {
+      if (booking.payment_mode === 'ONLINE' || booking.payment_mode === 'WALLET') {
         shouldRefund = true;
         refundAmount = Number(booking.total_amount);
       }

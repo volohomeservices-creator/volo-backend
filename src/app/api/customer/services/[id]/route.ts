@@ -22,8 +22,9 @@ export async function GET(
       // Allow public guest catalog access
     }
 
-    const { id: idOrSlug } = await params;
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(idOrSlug);
+    const rawParam = (await params).id;
+    const decoded = decodeURIComponent(rawParam).trim().toLowerCase();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(decoded);
 
     let item: any = null;
     let itemErr: any = null;
@@ -32,19 +33,22 @@ export async function GET(
       const { data, error } = await supabaseAdmin
         .from('service_items')
         .select('*, service_categories(name)')
-        .eq('id', idOrSlug)
+        .eq('id', decoded)
         .single();
       item = data;
       itemErr = error;
     } else {
-      // Find by slug name
+      // Find by slug name or direct name match
       const { data: allItems, error: fetchErr } = await supabaseAdmin
         .from('service_items')
         .select('*, service_categories(name)');
 
       if (fetchErr) throw fetchErr;
 
-      item = (allItems || []).find(it => getSlug(it.name) === idOrSlug.toLowerCase());
+      item = (allItems || []).find(it => {
+        const s = getSlug(it.name);
+        return s === decoded || it.name.toLowerCase().trim() === decoded;
+      });
     }
 
     if (itemErr || !item) {

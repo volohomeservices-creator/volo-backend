@@ -83,7 +83,11 @@ export class PayoutService {
   /**
    * Executes all pending/ready payouts for a given settlement batch via Razorpay Route
    */
-  static async executePayoutsForBatch(batchId: string, adminId: string) {
+  static async executePayoutsForBatch(
+    batchId: string,
+    adminId: string,
+    options?: { preferredMode?: 'upi' | 'banktransfer' | 'auto' }
+  ) {
     const { data: batch, error: batchErr } = await supabaseAdmin
       .from('settlement_batches')
       .select('*')
@@ -173,18 +177,26 @@ export class PayoutService {
           throw new Error('Worker does not have a registered bank account for settlement.');
         }
 
-        const { data: worker } = await supabaseAdmin
-          .from('workers')
-          .select('id, users:id(full_name, email, phone)')
+        // Directly query the user details (phone, email, full_name)
+        const { data: userRecord } = await supabaseAdmin
+          .from('users')
+          .select('full_name, email, phone')
           .eq('id', payout.worker_id)
-          .single();
+          .maybeSingle();
 
-        const userName = (worker?.users as any)?.full_name || bankAccount?.account_holder_name || 'Service Partner';
-        const userEmail = (worker?.users as any)?.email || '';
-        const userPhone = (worker?.users as any)?.phone || '';
+        const userName = userRecord?.full_name || bankAccount?.account_holder_name || 'Service Partner';
+        const userEmail = userRecord?.email || '';
+        const userPhone = userRecord?.phone || '';
+
+        const bankAccountWithContact = {
+          ...bankAccount,
+          phone: userPhone,
+          email: userEmail,
+          account_holder_name: userName,
+        };
 
         const contactId = await this.getProvider().createContact(payout.worker_id, userName, userEmail, userPhone);
-        const fundAccountId = await this.getProvider().createFundAccount(contactId, bankAccount);
+        const fundAccountId = await this.getProvider().createFundAccount(contactId, bankAccountWithContact);
 
         if (bankAccount) {
           await supabaseAdmin
@@ -198,18 +210,29 @@ export class PayoutService {
             .eq('id', bankAccount.id);
         }
 
-        const transferResult = await this.getProvider().createPayout(fundAccountId, Number(payout.amount), payout.id, bankAccount);
+        const preferredMode = options?.preferredMode || 'upi';
+        const transferResult = await this.getProvider().createPayout(
+          fundAccountId, 
+          Number(payout.amount), 
+          payout.id, 
+          bankAccountWithContact,
+          preferredMode
+        );
         const isSuccess = transferResult.status === 'processed';
-        const finalStatus = isSuccess ? PayoutStatus.PAID : PayoutStatus.PROCESSING;
+        const isFailed = transferResult.status === 'failed' || transferResult.status === 'rejected';
+        const finalStatus = isSuccess ? PayoutStatus.PAID : isFailed ? PayoutStatus.FAILED : PayoutStatus.PROCESSING;
+        const recordedMode = (preferredMode === 'banktransfer' || !bankAccount?.upi_id) ? 'banktransfer' : 'upi';
 
         await supabaseAdmin
           .from('payouts')
           .update({
             provider: providerName,
             provider_reference: transferResult.providerPayoutId,
-            provider_status: transferResult.status,
+            provider_status: transferResult.status?.toUpperCase() || (isFailed ? 'REJECTED' : 'PROCESSING'),
+            failure_reason: (transferResult as any).failureReason || (isFailed ? 'Transfer rejected by provider' : null),
             utr_number: transferResult.utr || null,
             status: finalStatus,
+            transfer_mode: recordedMode,
             processed_at: isSuccess ? new Date().toISOString() : null,
             execution_lock_until: null,
             updated_at: new Date().toISOString()
@@ -285,10 +308,21 @@ export class PayoutService {
       .eq('settlement_batch_id', batchId)
       .neq('status', PayoutStatus.PAID);
 
+    const { count: failedInBatch } = await supabaseAdmin
+      .from('payouts')
+      .select('*', { count: 'exact', head: true })
+      .eq('settlement_batch_id', batchId)
+      .eq('status', PayoutStatus.FAILED);
+
     if (remainingUnpaid === 0) {
       await supabaseAdmin
         .from('settlement_batches')
         .update({ status: 'PAID', updated_at: new Date().toISOString() })
+        .eq('id', batchId);
+    } else if ((failedInBatch || 0) > 0) {
+      await supabaseAdmin
+        .from('settlement_batches')
+        .update({ status: 'FAILED', updated_at: new Date().toISOString() })
         .eq('id', batchId);
     }
 
