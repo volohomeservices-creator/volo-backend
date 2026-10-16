@@ -9,6 +9,7 @@ export async function GET(request: NextRequest) {
   const amount = searchParams.get('amount') || '0';
   const currency = searchParams.get('currency') || 'INR';
   const bookingId = searchParams.get('booking_id') || '';
+  const returnUrl = searchParams.get('return_url') || '';
 
   if (!orderId || !keyId) {
     return new NextResponse('Missing required payment parameters.', { status: 400 });
@@ -20,7 +21,7 @@ export async function GET(request: NextRequest) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Complete Payment | VOLO Home Services</title>
-  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <script src="https://checkout.razorpay.com/v1/checkout.js" onerror="onScriptLoadError()"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -126,10 +127,31 @@ export async function GET(request: NextRequest) {
 
     <button id="pay-btn" class="btn" onclick="openPayment()">Pay Now with Razorpay</button>
     <div id="status" class="status-msg status-info"></div>
+
+    <form id="rzp-fallback-form" method="POST" action="https://api.razorpay.com/v1/checkout/embedded" style="display:none;">
+      <input type="hidden" name="key_id" value="${keyId}" />
+      <input type="hidden" name="order_id" value="${orderId}" />
+      <input type="hidden" name="name" value="VOLO Home Services" />
+      <input type="hidden" name="description" value="Booking Payment" />
+    </form>
   </div>
 
   <script>
+    var scriptBlocked = false;
+    function onScriptLoadError() {
+      scriptBlocked = true;
+    }
+
     function openPayment() {
+      var statusEl = document.getElementById('status');
+
+      if (typeof Razorpay === 'undefined' || scriptBlocked) {
+        statusEl.className = 'status-msg status-info';
+        statusEl.innerText = 'Redirecting to Razorpay Secure Gateway...';
+        document.getElementById('rzp-fallback-form').submit();
+        return;
+      }
+
       var options = {
         key: "${keyId}",
         amount: "${amount}",
@@ -139,35 +161,38 @@ export async function GET(request: NextRequest) {
         order_id: "${orderId}",
         theme: { color: "#7C3AED" },
         handler: async function(response) {
-          var statusEl = document.getElementById('status');
           statusEl.className = 'status-msg status-info';
           statusEl.innerText = 'Verifying payment with VOLO servers...';
           try {
-            var verifyRes = await fetch('/api/customer/payments/verify', {
+            await fetch('/api/customer/payments/verify', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(response)
             });
-            var data = await verifyRes.json();
-            if (data.success) {
-              statusEl.className = 'status-msg status-success';
-              statusEl.innerText = 'Payment Successful! Technician dispatched.';
-              document.getElementById('pay-btn').style.display = 'none';
-              setTimeout(function() {
-                window.location.href = '/customer/bookings/view?id=' + (data.bookingId || '${bookingId}');
-              }, 1200);
-            } else {
-              statusEl.className = 'status-msg status-error';
-              statusEl.innerText = 'Verification note: ' + (data.error || 'Payment recorded.');
-            }
           } catch(err) {
-            statusEl.className = 'status-msg status-error';
-            statusEl.innerText = 'Payment received! Return to VOLO app.';
+            console.error('Verify error:', err);
+          }
+
+          var targetUrl = "${returnUrl}";
+          if (targetUrl) {
+            statusEl.className = 'status-msg status-success';
+            statusEl.innerText = 'Payment Successful! Returning to VOLO...';
+            var redirectUri = targetUrl + (targetUrl.indexOf('?') === -1 ? '?' : '&') +
+              'razorpay_order_id=' + encodeURIComponent(response.razorpay_order_id) +
+              '&razorpay_payment_id=' + encodeURIComponent(response.razorpay_payment_id) +
+              '&razorpay_signature=' + encodeURIComponent(response.razorpay_signature) +
+              '&booking_id=' + encodeURIComponent('${bookingId}');
+            window.location.href = redirectUri;
+          } else {
+            statusEl.className = 'status-msg status-success';
+            statusEl.innerText = 'Payment Successful! Return to VOLO app.';
+            setTimeout(function() {
+              window.location.href = 'volo://payment-callback?razorpay_order_id=' + encodeURIComponent(response.razorpay_order_id) + '&razorpay_payment_id=' + encodeURIComponent(response.razorpay_payment_id);
+            }, 800);
           }
         },
         modal: {
           ondismiss: function() {
-            var statusEl = document.getElementById('status');
             statusEl.className = 'status-msg status-error';
             statusEl.innerText = 'Payment window was closed.';
           }
@@ -178,13 +203,18 @@ export async function GET(request: NextRequest) {
         var rzp = new Razorpay(options);
         rzp.open();
       } catch (err) {
-        document.getElementById('status').innerText = 'Could not open Razorpay checkout: ' + err.message;
+        // Fallback to hosted form if modal initialization fails
+        document.getElementById('rzp-fallback-form').submit();
       }
     }
 
-    // Auto-launch checkout
+    // Auto-launch checkout after script load
     window.addEventListener('load', function() {
-      setTimeout(openPayment, 400);
+      setTimeout(function() {
+        if (typeof Razorpay !== 'undefined') {
+          openPayment();
+        }
+      }, 500);
     });
   </script>
 </body>
