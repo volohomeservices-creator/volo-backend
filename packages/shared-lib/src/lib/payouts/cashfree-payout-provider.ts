@@ -143,10 +143,35 @@ export class CashfreePayoutProvider implements PayoutProvider {
     const cleanAccount = String(rawAccount).trim();
     const cleanIfsc = String(bankAccountDetails?.ifsc_code || '').trim().toUpperCase();
     const cleanName = String(bankAccountDetails?.account_holder_name || 'Volo Partner').trim();
-    const cleanPhone = String(bankAccountDetails?.phone || '9999999999').replace(/\D/g, '').slice(-10) || '9999999999';
+    let cleanPhone = String(bankAccountDetails?.phone || '').replace(/\D/g, '').slice(-10);
+
+    // If cleanPhone is empty or placeholder 9999999999, query real phone from users table
+    if (!cleanPhone || cleanPhone === '9999999999') {
+      const workerId = bankAccountDetails?.worker_id;
+      if (workerId) {
+        try {
+          const { supabaseAdmin } = await import('@/lib/supabase-server');
+          const { data: userRec } = await supabaseAdmin
+            .from('users')
+            .select('phone, email, full_name')
+            .eq('id', workerId)
+            .maybeSingle();
+          if (userRec?.phone) {
+            cleanPhone = String(userRec.phone).replace(/\D/g, '').slice(-10);
+          }
+          if (userRec?.email && (!bankAccountDetails?.email || !bankAccountDetails.email.includes('@'))) {
+            bankAccountDetails.email = userRec.email;
+          }
+        } catch (uErr) {
+          console.warn('[Cashfree Payouts] Failed to look up worker user record:', uErr);
+        }
+      }
+    }
+    if (!cleanPhone) cleanPhone = '9999999999';
+
     const cleanEmail = (bankAccountDetails?.email && bankAccountDetails.email.includes('@'))
       ? bankAccountDetails.email
-      : `${beneId}@volopartner.in`;
+      : (cleanPhone !== '9999999999' ? `partner.${cleanPhone}@voloapp.in` : `${beneId}@volopartner.in`);
 
     const payload = {
       beneId,
@@ -169,8 +194,32 @@ export class CashfreePayoutProvider implements PayoutProvider {
 
     const data = await response.json().catch(() => null);
 
-    // If already exists (subCode 409 or message contains "already exist"), treat as successful association
+    // If already exists (subCode 409 or message contains "already exist"), check if we need to sync updated real phone/email
     if (data?.subCode === '409' || (data?.message && data.message.toLowerCase().includes('already exist'))) {
+      if (cleanPhone && cleanPhone !== '9999999999') {
+        try {
+          // Remove outdated beneficiary and re-register with updated real phone and email
+          await fetch(`${this.baseUrl}/payout/v1/removeBeneficiary`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ beneId }),
+          });
+
+          await fetch(`${this.baseUrl}/payout/v1/addBeneficiary`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+          });
+        } catch (syncErr) {
+          console.warn('[Cashfree Payouts] Notice re-syncing beneficiary:', syncErr);
+        }
+      }
       return beneId;
     }
 
@@ -233,10 +282,34 @@ export class CashfreePayoutProvider implements PayoutProvider {
     const cleanAccount = String(rawAccount || '').trim();
     const cleanIfsc = String(bankAccountDetails?.ifsc_code || '').trim().toUpperCase();
     const cleanName = String(bankAccountDetails?.account_holder_name || 'Volo Partner').trim();
-    const cleanPhone = String(bankAccountDetails?.phone || '9999999999').replace(/\D/g, '').slice(-10) || '9999999999';
+    let cleanPhone = String(bankAccountDetails?.phone || '').replace(/\D/g, '').slice(-10);
+
+    if (!cleanPhone || cleanPhone === '9999999999') {
+      const workerId = bankAccountDetails?.worker_id;
+      if (workerId) {
+        try {
+          const { supabaseAdmin } = await import('@/lib/supabase-server');
+          const { data: userRec } = await supabaseAdmin
+            .from('users')
+            .select('phone, email, full_name')
+            .eq('id', workerId)
+            .maybeSingle();
+          if (userRec?.phone) {
+            cleanPhone = String(userRec.phone).replace(/\D/g, '').slice(-10);
+          }
+          if (userRec?.email && (!bankAccountDetails?.email || !bankAccountDetails.email.includes('@'))) {
+            bankAccountDetails.email = userRec.email;
+          }
+        } catch (uErr) {
+          console.warn('[Cashfree Payouts] Failed to look up worker user record:', uErr);
+        }
+      }
+    }
+    if (!cleanPhone) cleanPhone = '9999999999';
+
     const cleanEmail = (bankAccountDetails?.email && bankAccountDetails.email.includes('@'))
       ? bankAccountDetails.email
-      : `partner.${fundAccountId}@voloapp.in`;
+      : (cleanPhone !== '9999999999' ? `partner.${cleanPhone}@voloapp.in` : `partner.${fundAccountId}@voloapp.in`);
 
     const v2BaseUrl = this.environment === 'production'
       ? 'https://api.cashfree.com/payout'

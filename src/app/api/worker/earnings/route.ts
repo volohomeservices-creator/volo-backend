@@ -193,8 +193,19 @@ export async function POST(request: Request) {
     if (errorResponse) return errorResponse;
     const amount = Number(body.amount);
 
-    if (isNaN(amount) || amount <= 0) {
-      return NextResponse.json({ error: 'Invalid amount' }, { status: 400 });
+    // Fetch dynamic minimum top-up setting from platform_settings
+    const { data: minTopupSetting } = await supabaseAdmin
+      .from('platform_settings')
+      .select('value')
+      .eq('key', 'min_worker_wallet_topup')
+      .maybeSingle();
+
+    const minTopup = minTopupSetting ? Number(minTopupSetting.value) || 100 : 100;
+    if (isNaN(amount) || amount < minTopup) {
+      return NextResponse.json(
+        { error: `Minimum wallet top-up amount is ₹${minTopup}.` },
+        { status: 400 }
+      );
     }
 
     // 1. Get or create wallet

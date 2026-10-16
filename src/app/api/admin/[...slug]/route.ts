@@ -549,6 +549,43 @@ export async function GET(
       });
     }
 
+    // F.2 deletion-requests
+    if (slug[0] === 'deletion-requests' && slug.length === 1) {
+      try {
+        const { data: requests, error } = await supabaseAdmin
+          .from('account_deletion_requests')
+          .select(`
+            id,
+            user_id,
+            phone,
+            role,
+            reason,
+            status,
+            requested_via,
+            admin_notes,
+            processed_at,
+            created_at,
+            users (
+              full_name,
+              email,
+              is_active
+            )
+          `)
+          .order('created_at', { ascending: false });
+
+        if (error) {
+          return NextResponse.json({ requests: [], total: 0 });
+        }
+
+        return NextResponse.json({
+          requests: requests || [],
+          total: requests?.length || 0,
+        });
+      } catch (err) {
+        return NextResponse.json({ requests: [], total: 0 });
+      }
+    }
+
     // G. bookings
     if (slug[0] === 'bookings' && slug.length === 1) {
       const { searchParams } = new URL(request.url);
@@ -1455,6 +1492,49 @@ export async function POST(
             .update({ is_primary: false })
             .eq('worker_id', account.worker_id)
             .neq('id', accountId);
+
+          try {
+            const { DefaultPayoutProvider } = await import('@/lib/payouts/payout-provider');
+            const provider = new DefaultPayoutProvider();
+            const { data: fullAcc } = await supabaseAdmin
+              .from('worker_bank_accounts')
+              .select('*')
+              .eq('id', accountId)
+              .single();
+
+            if (fullAcc) {
+              const { data: userRec } = await supabaseAdmin
+                .from('users')
+                .select('full_name, email, phone')
+                .eq('id', fullAcc.worker_id)
+                .maybeSingle();
+
+              const userName = userRec?.full_name || fullAcc.account_holder_name || 'Volo Partner';
+              const userEmail = userRec?.email || '';
+              const userPhone = userRec?.phone || '';
+
+              const bankAccountWithContact = {
+                ...fullAcc,
+                phone: userPhone,
+                email: userEmail,
+                account_holder_name: userName,
+              };
+
+              const contactId = await provider.createContact(fullAcc.worker_id, userName, userEmail, userPhone);
+              const fundAccountId = await provider.createFundAccount(contactId, bankAccountWithContact);
+              await supabaseAdmin
+                .from('worker_bank_accounts')
+                .update({
+                  beneficiary_id: fundAccountId,
+                  provider_contact_id: contactId,
+                  provider_fund_account_id: fundAccountId,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('id', accountId);
+            }
+          } catch (linkErr: any) {
+            console.warn('[Auto-link on verify] Notice:', linkErr.message);
+          }
         }
 
         return NextResponse.json({ success: true, is_verified: isVerified });
@@ -2073,8 +2153,12 @@ export async function POST(
       const promises = Object.entries(settingsPayload).map(([key, val]) => {
         return supabaseAdmin
           .from('platform_settings')
-          .update({ value: String(val), updated_by: session.user_id, updated_at: new Date().toISOString() })
-          .eq('key', key);
+          .upsert({ 
+            key, 
+            value: String(val), 
+            updated_by: session.user_id, 
+            updated_at: new Date().toISOString() 
+          }, { onConflict: 'key' });
       });
 
       await Promise.all(promises);
@@ -2091,6 +2175,118 @@ export async function POST(
       });
 
       return NextResponse.json({ success: true, settings: settingsPayload });
+    }
+
+    // G.2 customers/[id]/status
+    if (slug[0] === 'customers' && slug.length === 3 && slug[2] === 'status') {
+      const customerId = slug[1];
+      const { data: { action }, errorResponse } = await validateBody(request, z.any());
+      if (errorResponse) return errorResponse;
+
+      if (!action || !['ACTIVATE', 'DEACTIVATE', 'SUSPEND'].includes(action)) {
+        return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+      }
+
+      const isActive = action === 'ACTIVATE';
+
+      const { data: updatedUser, error } = await supabaseAdmin
+        .from('users')
+        .update({ is_active: isActive })
+        .eq('id', customerId)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+
+      await logAuditAction({
+        admin_id: session.user_id,
+        action: isActive ? AuditAction.CUSTOMER_ACTIVATED : AuditAction.CUSTOMER_DEACTIVATED,
+        target_type: 'customer',
+        target_id: customerId,
+        metadata: { action }
+      });
+
+      return NextResponse.json({ success: true, user: updatedUser });
+    }
+
+    // G.3 deletion-requests
+    if (slug[0] === 'deletion-requests' && slug.length === 1) {
+      const body = await request.json();
+      const { requestId, action, notes } = body;
+
+      if (!requestId || !['APPROVE_PURGE', 'REJECT'].includes(action)) {
+        return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+      }
+
+      const { data: reqItem, error: reqErr } = await supabaseAdmin
+        .from('account_deletion_requests')
+        .select('*')
+        .eq('id', requestId)
+        .single();
+
+      if (reqErr || !reqItem) {
+        return NextResponse.json({ error: 'Deletion request not found' }, { status: 404 });
+      }
+
+      if (action === 'REJECT') {
+        await supabaseAdmin
+          .from('account_deletion_requests')
+          .update({
+            status: 'REJECTED',
+            admin_notes: notes || 'Rejected by admin',
+            processed_at: new Date().toISOString(),
+            processed_by: session.user_id,
+          })
+          .eq('id', requestId);
+
+        return NextResponse.json({ success: true, message: 'Request rejected' });
+      }
+
+      if (action === 'APPROVE_PURGE') {
+        if (reqItem.user_id) {
+          await supabaseAdmin
+            .from('users')
+            .update({
+              full_name: 'Deleted User',
+              email: null,
+              phone: `+910000000000_deleted_${reqItem.user_id.slice(0, 8)}`,
+              avatar_url: null,
+              is_active: false,
+              is_suspended: true,
+            })
+            .eq('id', reqItem.user_id);
+
+          try {
+            await supabaseAdmin
+              .from('customer_addresses')
+              .delete()
+              .eq('customer_id', reqItem.user_id);
+          } catch (e) {
+            // ignore if table not present
+          }
+
+          try {
+            await supabaseAdmin
+              .from('fcm_tokens')
+              .delete()
+              .eq('user_id', reqItem.user_id);
+          } catch (e) {
+            // ignore if table not present
+          }
+        }
+
+        await supabaseAdmin
+          .from('account_deletion_requests')
+          .update({
+            status: 'PROCESSED',
+            admin_notes: notes || 'Personal data purged by admin',
+            processed_at: new Date().toISOString(),
+            processed_by: session.user_id,
+          })
+          .eq('id', requestId);
+
+        return NextResponse.json({ success: true, message: 'Account data successfully purged' });
+      }
     }
 
     return NextResponse.json({ error: 'Route not found' }, { status: 404 });

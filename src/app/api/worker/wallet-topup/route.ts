@@ -6,7 +6,7 @@ import { supabaseAdmin } from '@/lib/supabase-server';
 import { paymentProvider } from '@/lib/razorpay-payment-provider';
 
 const TopUpSchema = z.object({
-  amount: z.number().min(100, 'Minimum top-up is ₹100').max(50000, 'Maximum top-up is ₹50,000'),
+  amount: z.number().positive('Top-up amount must be positive').max(50000, 'Maximum top-up is ₹50,000'),
 });
 
 /**
@@ -22,6 +22,21 @@ export async function POST(request: Request) {
     if (errorResponse) return errorResponse;
 
     const amount = body.amount;
+
+    // Fetch dynamic minimum topup from platform_settings
+    const { data: minTopupSetting } = await supabaseAdmin
+      .from('platform_settings')
+      .select('value')
+      .eq('key', 'min_worker_wallet_topup')
+      .maybeSingle();
+
+    const minTopup = minTopupSetting ? Number(minTopupSetting.value) || 100 : 100;
+    if (amount < minTopup) {
+      return NextResponse.json(
+        { error: `Minimum wallet top-up amount is ₹${minTopup}.` },
+        { status: 400 }
+      );
+    }
 
     // 1. Get or create worker wallet
     let { data: wallet } = await supabaseAdmin

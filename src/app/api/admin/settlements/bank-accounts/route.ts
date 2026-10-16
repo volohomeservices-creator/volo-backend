@@ -95,11 +95,25 @@ export async function POST(request: Request) {
           .single();
 
         if (fullAcc && !fullAcc.provider_fund_account_id) {
-          const userName = fullAcc.workers?.users?.full_name || fullAcc.account_holder_name;
-          const userEmail = fullAcc.workers?.users?.email || '';
-          const userPhone = fullAcc.workers?.users?.phone || '';
+          const { data: userRec } = await supabaseAdmin
+            .from('users')
+            .select('full_name, email, phone')
+            .eq('id', fullAcc.worker_id)
+            .maybeSingle();
+
+          const userName = userRec?.full_name || fullAcc.account_holder_name || 'Volo Partner';
+          const userEmail = userRec?.email || '';
+          const userPhone = userRec?.phone || '';
+
+          const bankAccountWithContact = {
+            ...fullAcc,
+            phone: userPhone,
+            email: userEmail,
+            account_holder_name: userName,
+          };
+
           const contactId = await provider.createContact(fullAcc.worker_id, userName, userEmail, userPhone);
-          const fundAccountId = await provider.createFundAccount(contactId, fullAcc);
+          const fundAccountId = await provider.createFundAccount(contactId, bankAccountWithContact);
           await supabaseAdmin
             .from('worker_bank_accounts')
             .update({
