@@ -773,70 +773,353 @@ export async function GET(
       });
     }
 
-    // K. settlements
-    if (slug[0] === 'settlements' && slug.length === 1) {
-      const { searchParams } = new URL(request.url);
-      const page = Math.max(1, Number(searchParams.get('page') || 1));
-      const limit = Math.max(1, Number(searchParams.get('limit') || 20));
-      const status = searchParams.get('status') || '';
-      const dateFrom = searchParams.get('date_from') || '';
-      const dateTo = searchParams.get('date_to') || '';
+    // K. settlements (overview, batches, ledger, or specific subroutes)
+    if (slug[0] === 'settlements') {
+      // 1. cashfree-balance
+      if (slug[1] === 'cashfree-balance') {
+        const { CashfreePayoutProvider } = await import('@/lib/payouts/cashfree-payout-provider');
+        const provider = new CashfreePayoutProvider();
+        const isLive = provider.isLiveEnabled();
+        const env = provider.getEnvironment();
+        try {
+          const balanceData = await provider.getBalance();
+          return NextResponse.json({
+            success: true,
+            environment: env,
+            isLiveEnabled: isLive,
+            balance: balanceData.balance,
+            availableBalance: balanceData.availableBalance,
+            currency: 'INR',
+            status: 'CONNECTED',
+          });
+        } catch (providerErr: any) {
+          const msg = providerErr.message || '';
+          const isIpRestricted = msg.includes('IP not whitelisted') || msg.includes('403');
+          return NextResponse.json({
+            success: false,
+            environment: env,
+            isLiveEnabled: isLive,
+            balance: null,
+            status: isIpRestricted ? 'IP_RESTRICTED' : 'CONNECTION_ERROR',
+            message: msg,
+            ipHelpUrl: 'https://docs.cashfree.com/docs/payouts-2fa#ip-whitelist',
+          });
+        }
+      }
 
-      const offset = (page - 1) * limit;
+      // 2. bank-accounts
+      if (slug[1] === 'bank-accounts') {
+        const { data, error } = await supabaseAdmin
+          .from('worker_bank_accounts')
+          .select('*, workers(users(full_name, phone))')
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        const { decryptData } = await import('@/lib/crypto');
+        const decryptedData = (data || []).map((account: any) => {
+          let decryptedAccount = '';
+          try {
+            decryptedAccount = decryptData(account.account_number_encrypted);
+          } catch (e) {
+            decryptedAccount = 'Error Decrypting';
+          }
+          const upiId = account.upi_id || (account.branch?.startsWith('UPI:') ? account.branch.replace('UPI:', '').trim() : '');
+          return {
+            ...account,
+            upi_id: upiId || null,
+            account_number_decrypted: decryptedAccount
+          };
+        });
+        return NextResponse.json({ accounts: decryptedData });
+      }
 
-      let query = supabaseAdmin
-        .from('settlement_ledger')
-        .select('*, worker:workers(users(full_name, phone))', { count: 'exact' });
+      // 3. batch-items
+      if (slug[1] === 'batch-items') {
+        const { searchParams } = new URL(request.url);
+        const batchId = searchParams.get('batchId');
+        if (!batchId) return NextResponse.json({ error: 'Missing batchId parameter' }, { status: 400 });
 
-      if (status) query = query.eq('status', status);
-      if (dateFrom) query = query.gte('created_at', dateFrom);
-      if (dateTo) query = query.lte('created_at', dateTo);
+        const { data: batch, error: bErr } = await supabaseAdmin
+          .from('settlement_batches')
+          .select('*')
+          .eq('id', batchId)
+          .single();
+        if (bErr || !batch) return NextResponse.json({ error: 'Batch not found' }, { status: 404 });
 
-      const { data: settlements, count, error } = await query
-        .order('created_at', { ascending: false })
-        .range(offset, offset + limit - 1);
+        const { data: items, error: iErr } = await supabaseAdmin
+          .from('settlement_ledger')
+          .select(`
+            id,
+            worker_id,
+            booking_id,
+            gross_amount,
+            commission_amount,
+            net_amount,
+            status,
+            razorpayx_transfer_id,
+            created_at,
+            workers:worker_id(
+              id,
+              users:id(full_name, phone)
+            )
+          `)
+          .eq('settlement_batch_id', batchId);
+        if (iErr) throw iErr;
 
-      if (error) throw error;
+        const workerIds = Array.from(new Set((items || []).map((it: any) => it.worker_id)));
+        let bankMap = new Map();
+        if (workerIds.length > 0) {
+          const { data: banks } = await supabaseAdmin
+            .from('worker_bank_accounts')
+            .select('worker_id, bank_name, account_last_four, ifsc_code, is_verified, provider_fund_account_id')
+            .in('worker_id', workerIds);
+          (banks || []).forEach((b: any) => bankMap.set(b.worker_id, b));
+        }
 
-      return NextResponse.json({
-        settlements: (settlements || []).map((s: any) => ({
-          id: s.id,
-          worker_id: s.worker_id,
-          worker_name: s.worker?.users?.full_name,
-          worker_phone: s.worker?.users?.phone,
-          gross_amount: s.gross_amount,
-          commission_amount: s.commission_amount,
-          net_amount: s.net_amount,
-          status: s.status,
-          created_at: s.created_at
-        })),
-        total: count || 0,
-        page,
-        totalPages: Math.ceil((count || 0) / limit)
-      });
-    }
+        const workerGroups = new Map();
+        (items || []).forEach((it: any) => {
+          const wId = it.worker_id;
+          const bank = bankMap.get(wId);
+          const wName = it.workers?.users?.full_name || 'Service Partner';
+          const wPhone = it.workers?.users?.phone || '';
 
-    // L. settlements/[worker_id]
-    if (slug[0] === 'settlements' && slug.length === 2) {
-      const workerId = slug[1];
+          if (!workerGroups.has(wId)) {
+            workerGroups.set(wId, {
+              workerId: wId,
+              workerName: wName,
+              workerPhone: wPhone,
+              bankName: bank?.bank_name || 'Registered Bank',
+              accountLastFour: bank?.account_last_four || 'XXXX',
+              ifscCode: bank?.ifsc_code || '',
+              isBankVerified: !!bank?.is_verified,
+              routeAccountId: bank?.provider_fund_account_id || null,
+              grossAmount: 0,
+              commissionAmount: 0,
+              netAmount: 0,
+              bookingCount: 0,
+              status: it.status,
+              transferId: it.razorpayx_transfer_id || null,
+              bookings: []
+            });
+          }
 
-      const { data: userProfile } = await supabaseAdmin
-        .from('users')
-        .select('full_name, phone')
-        .eq('id', workerId)
-        .single();
+          const curr = workerGroups.get(wId);
+          curr.grossAmount += Number(it.gross_amount || 0);
+          curr.commissionAmount += Number(it.commission_amount || 0);
+          curr.netAmount += Number(it.net_amount || 0);
+          curr.bookingCount += 1;
+          if (it.razorpayx_transfer_id) curr.transferId = it.razorpayx_transfer_id;
+          curr.bookings.push({
+            bookingId: it.booking_id,
+            gross: Number(it.gross_amount || 0),
+            commission: Number(it.commission_amount || 0),
+            net: Number(it.net_amount || 0)
+          });
+        });
 
-      const { data: ledger } = await supabaseAdmin
-        .from('settlement_ledger')
-        .select('*, payment:payments(booking_id, amount)')
-        .eq('worker_id', workerId)
-        .order('created_at', { ascending: false });
+        return NextResponse.json({
+          success: true,
+          batch,
+          workers: Array.from(workerGroups.values())
+        });
+      }
 
-      return NextResponse.json({
-        worker_name: userProfile?.full_name || 'Worker',
-        worker_phone: userProfile?.phone || '',
-        history: ledger || []
-      });
+      // 4. payout-status
+      if (slug[1] === 'payout-status') {
+        const { searchParams } = new URL(request.url);
+        const batchId = searchParams.get('batchId');
+        if (!batchId) return NextResponse.json({ error: 'batchId is required' }, { status: 400 });
+
+        try {
+          const { PayoutService } = await import('@/lib/payouts/payout-service');
+          await PayoutService.reconcilePayouts();
+        } catch (recErr) {
+          console.warn('[PayoutStatus] Live reconcile notice:', recErr);
+        }
+
+        const { data: payouts, error } = await supabaseAdmin
+          .from('payouts')
+          .select(`
+            id,
+            worker_id,
+            amount,
+            status,
+            provider,
+            provider_reference,
+            provider_status,
+            utr_number,
+            failure_code,
+            failure_reason,
+            retry_count,
+            processed_at,
+            created_at,
+            updated_at,
+            workers:worker_id(
+              id,
+              users:id(full_name, phone)
+            )
+          `)
+          .eq('settlement_batch_id', batchId)
+          .order('created_at', { ascending: false });
+
+        if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+        return NextResponse.json({ payouts: payouts || [] });
+      }
+
+      // 5. settlements/[worker_id]
+      if (slug.length === 2) {
+        const workerId = slug[1];
+
+        const { data: userProfile } = await supabaseAdmin
+          .from('users')
+          .select('full_name, phone')
+          .eq('id', workerId)
+          .single();
+
+        const { data: ledger } = await supabaseAdmin
+          .from('settlement_ledger')
+          .select('*, payment:payments(booking_id, amount)')
+          .eq('worker_id', workerId)
+          .order('created_at', { ascending: false });
+
+        return NextResponse.json({
+          worker_name: userProfile?.full_name || 'Worker',
+          worker_phone: userProfile?.phone || '',
+          history: ledger || []
+        });
+      }
+
+      // 6. settlements (overview, batches, ledger)
+      if (slug.length === 1) {
+        const { searchParams } = new URL(request.url);
+        const pageParam = searchParams.get('page');
+
+        if (pageParam) {
+          const page = Math.max(1, Number(pageParam || 1));
+          const limit = Math.max(1, Number(searchParams.get('limit') || 20));
+          const status = searchParams.get('status') || '';
+          const dateFrom = searchParams.get('date_from') || '';
+          const dateTo = searchParams.get('date_to') || '';
+
+          const offset = (page - 1) * limit;
+
+          let query = supabaseAdmin
+            .from('settlement_ledger')
+            .select('*, worker:workers(users(full_name, phone))', { count: 'exact' });
+
+          if (status) query = query.eq('status', status);
+          if (dateFrom) query = query.gte('created_at', dateFrom);
+          if (dateTo) query = query.lte('created_at', dateTo);
+
+          const { data: settlements, count, error } = await query
+            .order('created_at', { ascending: false })
+            .range(offset, offset + limit - 1);
+
+          if (error) throw error;
+
+          return NextResponse.json({
+            settlements: (settlements || []).map((s: any) => ({
+              id: s.id,
+              worker_id: s.worker_id,
+              worker_name: s.worker?.users?.full_name,
+              worker_phone: s.worker?.users?.phone,
+              gross_amount: s.gross_amount,
+              commission_amount: s.commission_amount,
+              net_amount: s.net_amount,
+              status: s.status,
+              created_at: s.created_at
+            })),
+            total: count || 0,
+            page,
+            totalPages: Math.ceil((count || 0) / limit)
+          });
+        }
+
+        const { data: batchesData } = await supabaseAdmin
+          .from('settlement_batches')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        const { data: ledgerData } = await supabaseAdmin
+          .from('settlement_ledger')
+          .select(`
+            id,
+            worker_id,
+            booking_id,
+            gross_amount,
+            commission_amount,
+            net_amount,
+            status,
+            created_at,
+            settlement_batch_id,
+            updated_at,
+            workers:worker_id(
+              id,
+              rating,
+              users:id(full_name, phone)
+            ),
+            bookings:booking_id(
+              id,
+              total_amount,
+              service_items(name)
+            )
+          `)
+          .order('created_at', { ascending: false })
+          .limit(100);
+
+        let finalLedger = ledgerData;
+        if (!ledgerData || ledgerData.length === 0) {
+          const { data: rawLedger } = await supabaseAdmin
+            .from('settlement_ledger')
+            .select('*, workers(users(full_name, phone))')
+            .order('created_at', { ascending: false })
+            .limit(100);
+          finalLedger = rawLedger || [];
+        }
+
+        let batchPending = 0;
+        let batchReady = 0;
+        let batchPaid = 0;
+        let totalComm = 0;
+        let totalEarn = 0;
+
+        (batchesData || []).forEach((b: any) => {
+          totalComm += Number(b.commission_amount || 0);
+          totalEarn += Number(b.net_amount || 0);
+          if (b.status === 'PROCESSING') batchPending++;
+          if (b.status === 'READY_FOR_PAYOUT') batchReady++;
+          if (b.status === 'PAID') batchPaid++;
+        });
+
+        let unbatchedPendingGross = 0;
+        let unbatchedPendingComm = 0;
+        let unbatchedPendingNet = 0;
+        let unbatchedCount = 0;
+
+        (finalLedger || []).forEach((l: any) => {
+          if (l.status === 'PENDING' && !l.settlement_batch_id) {
+            unbatchedPendingGross += Number(l.gross_amount || 0);
+            unbatchedPendingComm += Number(l.commission_amount || 0);
+            unbatchedPendingNet += Number(l.net_amount || 0);
+            unbatchedCount++;
+          }
+        });
+
+        const overview = {
+          pending: batchPending + (unbatchedCount > 0 ? 1 : 0),
+          ready: batchReady,
+          paid: batchPaid,
+          totalComm: Number((totalComm + unbatchedPendingComm).toFixed(2)),
+          totalEarn: Number((totalEarn + unbatchedPendingNet).toFixed(2)),
+          unbatchedCount,
+          unbatchedPendingNet: Number(unbatchedPendingNet.toFixed(2))
+        };
+
+        return NextResponse.json({
+          overview,
+          batches: batchesData || [],
+          ledger: finalLedger || []
+        });
+      }
     }
 
     // M. reports/revenue
@@ -1077,6 +1360,173 @@ export async function POST(
   try {
     const session = await requireRole(request, 'admin');
     const { slug } = await params;
+
+    // Settlements actions
+    if (slug[0] === 'settlements') {
+      // 1. reset-batch
+      if (slug[1] === 'reset-batch') {
+        const { data: body, errorResponse } = await validateBody(request, z.any());
+        if (errorResponse) return errorResponse;
+        const batchId = body?.batchId;
+        if (!batchId) return NextResponse.json({ error: 'batchId is required' }, { status: 400 });
+
+        await supabaseAdmin
+          .from('payouts')
+          .update({
+            status: 'READY_FOR_PAYOUT',
+            failure_reason: null,
+            failure_code: null,
+            execution_lock_until: null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('settlement_batch_id', batchId)
+          .neq('status', 'PAID');
+
+        await supabaseAdmin
+          .from('settlement_batches')
+          .update({
+            status: 'READY_FOR_PAYOUT',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', batchId);
+
+        return NextResponse.json({ success: true, message: 'Batch reset to READY_FOR_PAYOUT' });
+      }
+
+      // 2. mark-ready
+      if (slug[1] === 'mark-ready') {
+        const { data: body, errorResponse } = await validateBody(request, z.any());
+        if (errorResponse) return errorResponse;
+        const { batchId } = body || {};
+        if (!batchId) return NextResponse.json({ error: 'Missing batchId' }, { status: 400 });
+
+        const { markReadyForPayout } = await import('@/lib/settlement-engine');
+        const result = await markReadyForPayout(batchId, session.user_id);
+        if (!result.success) return NextResponse.json({ error: result.error }, { status: 500 });
+        return NextResponse.json({ success: true });
+      }
+
+      // 3. execute
+      if (slug[1] === 'execute') {
+        const { data: body, errorResponse } = await validateBody(request, z.any());
+        if (errorResponse) return errorResponse;
+        const { batchId, preferredMode } = body || {};
+        if (!batchId) return NextResponse.json({ error: 'Missing batchId' }, { status: 400 });
+
+        const { PayoutService } = await import('@/lib/payouts/payout-service');
+        const result = await PayoutService.executePayoutsForBatch(batchId, session.user_id, {
+          preferredMode: preferredMode === 'banktransfer' ? 'banktransfer' : 'upi'
+        });
+        return NextResponse.json(result);
+      }
+
+      // 4. reconcile
+      if (slug[1] === 'reconcile') {
+        const { PayoutService } = await import('@/lib/payouts/payout-service');
+        const result = await PayoutService.reconcilePayouts();
+        return NextResponse.json(result);
+      }
+
+      // 5. bank-accounts (VERIFY / REJECT)
+      if (slug[1] === 'bank-accounts') {
+        const { data: body, errorResponse } = await validateBody(request, z.any());
+        if (errorResponse) return errorResponse;
+        const { accountId, action } = body || {};
+        if (!accountId || !action) return NextResponse.json({ error: 'Missing accountId or action' }, { status: 400 });
+
+        const isVerified = action === 'VERIFY';
+        const { data: account, error: updateErr } = await supabaseAdmin
+          .from('worker_bank_accounts')
+          .update({ 
+            is_verified: isVerified,
+            verification_status: isVerified ? 'VERIFIED' : 'FAILED',
+            is_primary: isVerified ? true : false,
+            updated_at: new Date().toISOString() 
+          })
+          .eq('id', accountId)
+          .select('worker_id')
+          .single();
+
+        if (updateErr || !account) throw updateErr;
+
+        if (isVerified) {
+          await supabaseAdmin
+            .from('worker_bank_accounts')
+            .update({ is_primary: false })
+            .eq('worker_id', account.worker_id)
+            .neq('id', accountId);
+        }
+
+        return NextResponse.json({ success: true, is_verified: isVerified });
+      }
+
+      // 6. payout-status (single payout retry)
+      if (slug[1] === 'payout-status') {
+        const { data: body, errorResponse } = await validateBody(request, z.any());
+        if (errorResponse) return errorResponse;
+        const { payoutId } = body || {};
+        if (!payoutId) return NextResponse.json({ error: 'payoutId is required' }, { status: 400 });
+
+        const { data, error } = await supabaseAdmin
+          .from('payouts')
+          .update({
+            status: 'READY_FOR_PAYOUT',
+            failure_reason: null,
+            failure_code: null,
+            execution_lock_until: null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', payoutId)
+          .select()
+          .single();
+
+        if (error || !data) {
+          return NextResponse.json({ error: error?.message || 'Payout not found' }, { status: 400 });
+        }
+
+        if (data.settlement_batch_id) {
+          await supabaseAdmin
+            .from('settlement_batches')
+            .update({
+              status: 'READY_FOR_PAYOUT',
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', data.settlement_batch_id);
+        }
+
+        return NextResponse.json({ success: true, message: 'Payout reset to READY_FOR_PAYOUT for retry' });
+      }
+
+      // 7. settlements root (POST to generate batch, or PATCH to update batch)
+      if (slug.length === 1) {
+        const { data: body } = await validateBody(request, z.any());
+        // If batchId is present, this is an update (PATCH)
+        if (body?.batchId) {
+          const { batchId, batch_type, batch_reference, status } = body;
+          const updateFields: any = { updated_at: new Date().toISOString() };
+          if (batch_type) updateFields.batch_type = String(batch_type).toUpperCase();
+          if (batch_reference) updateFields.batch_reference = String(batch_reference).trim();
+          if (status) updateFields.status = String(status).toUpperCase();
+
+          const { data, error } = await supabaseAdmin
+            .from('settlement_batches')
+            .update(updateFields)
+            .eq('id', batchId)
+            .select()
+            .single();
+
+          if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+          return NextResponse.json({ success: true, message: 'Settlement batch updated successfully', batch: data });
+        } else {
+          // Otherwise generate batch
+          const days = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+          const batchType = (body?.batch_type || days[new Date().getDay()]).toUpperCase();
+          const { generateSettlementBatch } = await import('@/lib/settlement-engine');
+          const result = await generateSettlementBatch(batchType);
+          return NextResponse.json(result);
+        }
+      }
+    }
 
     // A.2 services/categories
     if (slug[0] === 'services' && slug[1] === 'categories' && slug.length === 2) {
@@ -1674,6 +2124,54 @@ export async function DELETE(
   try {
     const session = await requireRole(request, 'admin');
     const { slug } = await params;
+
+    // Settlements batch delete
+    if (slug[0] === 'settlements') {
+      const { searchParams } = new URL(request.url);
+      const batchId = searchParams.get('batchId') || (slug.length === 2 ? slug[1] : null);
+
+      if (!batchId) {
+        return NextResponse.json({ error: 'batchId is required' }, { status: 400 });
+      }
+
+      const { data: batch, error: fetchErr } = await supabaseAdmin
+        .from('settlement_batches')
+        .select('id, status, batch_reference')
+        .eq('id', batchId)
+        .single();
+
+      if (fetchErr || !batch) {
+        return NextResponse.json({ error: 'Batch not found' }, { status: 404 });
+      }
+
+      if (batch.status === 'PAID') {
+        return NextResponse.json({ error: 'Cannot delete a completed/paid settlement batch.' }, { status: 400 });
+      }
+
+      await supabaseAdmin
+        .from('settlement_ledger')
+        .update({ settlement_batch_id: null, status: 'PENDING' })
+        .eq('settlement_batch_id', batchId);
+
+      await supabaseAdmin
+        .from('payouts')
+        .delete()
+        .eq('settlement_batch_id', batchId);
+
+      const { error: delErr } = await supabaseAdmin
+        .from('settlement_batches')
+        .delete()
+        .eq('id', batchId);
+
+      if (delErr) {
+        return NextResponse.json({ error: delErr.message }, { status: 400 });
+      }
+
+      return NextResponse.json({ 
+        success: true, 
+        message: `Batch ${batch.batch_reference} deleted successfully. Associated ledger items have been reverted to PENDING.` 
+      });
+    }
 
     // A. services/[id] (Try Hard Delete first, Fallback to Soft Delete if used in bookings)
     if (slug[0] === 'services' && slug.length === 2) {
