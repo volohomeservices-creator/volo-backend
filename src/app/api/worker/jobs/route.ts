@@ -14,7 +14,7 @@ export async function GET(request: Request) {
 
     // 1. Fetch worker location to calculate distance (prefer live location, fallback to profile coordinates)
     const [workerRes, liveLocRes] = await Promise.all([
-      supabaseAdmin.from('workers').select('current_lat, current_lng, status').eq('id', workerId).single(),
+      supabaseAdmin.from('workers').select('current_lat, current_lng, status, service_category_ids').eq('id', workerId).single(),
       supabaseAdmin.from('worker_live_locations').select('latitude, longitude').eq('worker_id', workerId).maybeSingle()
     ]);
 
@@ -25,6 +25,7 @@ export async function GET(request: Request) {
     const liveLoc = liveLocRes.data;
     const current_lat = liveLoc ? Number(liveLoc.latitude) : workerRes.data.current_lat;
     const current_lng = liveLoc ? Number(liveLoc.longitude) : workerRes.data.current_lng;
+    const workerCategories = (workerRes.data.service_category_ids || []) as string[];
 
     if (tab === 'new') {
       // Haversine function in Javascript
@@ -51,7 +52,7 @@ export async function GET(request: Request) {
       // B. Fetch manually assigned bookings for this worker
       const { data: manuallyAssignedBookings, error: manualErr } = await supabaseAdmin
         .from('bookings')
-        .select('*, service_items(name), customer:users!bookings_customer_id_fkey(full_name)')
+        .select('*, service_items(name, category_id), customer:users!bookings_customer_id_fkey(full_name)')
         .eq('status', 'WORKER_ASSIGNED')
         .eq('worker_id', workerId);
 
@@ -62,7 +63,7 @@ export async function GET(request: Request) {
         .from('bookings')
         .select(`
           *,
-          service_items(name),
+          service_items(name, category_id),
           customer:users!bookings_customer_id_fkey(full_name),
           assignment_queue!inner(status, group_workers, group_expires_at)
         `)
@@ -74,17 +75,31 @@ export async function GET(request: Request) {
       // D. Filter broadcasting bookings in memory:
       // - Worker must be in the current group of the queue
       // - Worker must not have rejected this booking
+      // - Booking category must match worker's assigned categories
       const eligibleBroadcastBookings = (broadcastingBookings || []).filter((b: any) => {
         if (rejectedBookingIds.has(b.id)) return false;
+
+        if (workerCategories.length > 0 && b.service_items?.category_id) {
+          if (!workerCategories.includes(b.service_items.category_id)) {
+            return false;
+          }
+        }
 
         const groupWorkers = b.assignment_queue?.group_workers || [];
         const isInGroup = groupWorkers.some((gw: any) => gw.worker_id === workerId);
         return isInGroup;
       });
 
+      const filteredManualBookings = (manuallyAssignedBookings || []).filter((b: any) => {
+        if (workerCategories.length > 0 && b.service_items?.category_id) {
+          return workerCategories.includes(b.service_items.category_id);
+        }
+        return true;
+      });
+
       // E. Merge manually assigned and eligible broadcast bookings
       const mergedBookings = [
-        ...(manuallyAssignedBookings || []),
+        ...filteredManualBookings,
         ...eligibleBroadcastBookings
       ];
 

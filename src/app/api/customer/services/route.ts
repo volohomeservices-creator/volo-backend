@@ -38,13 +38,26 @@ export async function GET(request: Request) {
 
       if (catErr) throw catErr;
 
-      // 2. Fetch service items with filtering (explicit select)
+      const activeCategoryIds = new Set((categories || []).map(c => c.id));
+      if (activeCategoryIds.size === 0) {
+        return {
+          categories: [],
+          items: [],
+          activePromo: null
+        };
+      }
+
+      // 2. Fetch service items with filtering (only active items under active categories)
       let query = supabaseAdmin
         .from('service_items')
         .select('id, category_id, name, description, base_price, estimated_mins, icon_url, is_active, created_at, service_categories(name, icon_url)')
-        .eq('is_active', true);
+        .eq('is_active', true)
+        .in('category_id', Array.from(activeCategoryIds));
 
       if (categoryId) {
+        if (!activeCategoryIds.has(categoryId)) {
+          return { categories: [], items: [], activePromo: null };
+        }
         query = query.eq('category_id', categoryId);
       }
 
@@ -55,6 +68,9 @@ export async function GET(request: Request) {
       const { data: items, error: itemsErr } = await query;
       if (itemsErr) throw itemsErr;
 
+      // Filter items to ensure strict active category match
+      const activeItems = (items || []).filter(item => activeCategoryIds.has(item.category_id));
+
       // Fetch only necessary booking reviews mapping info (explicit select)
       const { data: bookingsData } = await supabaseAdmin
         .from('bookings')
@@ -62,7 +78,7 @@ export async function GET(request: Request) {
 
       // Nest items under their corresponding category
       const categoriesWithItems = (categories || []).map(cat => {
-        const catItems = (items || []).filter(item => item.category_id === cat.id);
+        const catItems = activeItems.filter(item => item.category_id === cat.id);
         
         const categoryItemIds = catItems.map(i => i.id);
         const catBookings = (bookingsData || []).filter(b => categoryItemIds.includes(b.service_item_id));
@@ -98,7 +114,7 @@ export async function GET(request: Request) {
 
       return {
         categories: categoriesWithItems,
-        items: items || [],
+        items: activeItems,
         activePromo: activePromo ? {
           code: activePromo.code,
           description: activePromo.description,

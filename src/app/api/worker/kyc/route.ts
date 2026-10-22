@@ -83,11 +83,22 @@ export async function GET(request: Request) {
       .eq('worker_id', workerId)
       .maybeSingle();
 
-    // Fetch active categories
-    const { data: categories } = await supabaseAdmin
+    // Fetch active categories (strictly active, ordered, and deduplicated)
+    const { data: rawCategories } = await supabaseAdmin
       .from('service_categories')
       .select('id, name')
-      .eq('is_active', true);
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true });
+
+    const seenCategoryNames = new Set<string>();
+    const categories: Array<{ id: string; name: string }> = [];
+    (rawCategories || []).forEach((c: any) => {
+      const normalized = (c.name || '').trim().toLowerCase();
+      if (normalized && !seenCategoryNames.has(normalized)) {
+        seenCategoryNames.add(normalized);
+        categories.push({ id: c.id, name: c.name.trim() });
+      }
+    });
 
     return NextResponse.json({
       success: true,
@@ -217,13 +228,16 @@ export async function POST(request: Request) {
         if (updateUserErr) throw updateUserErr;
       }
 
-      // Save/Update skills in worker_profiles
-      if (Array.isArray(skills)) {
+      // Save/Update skills in worker_profiles (Worker can only choose ONE service trade)
+      if (Array.isArray(skills) && skills.length > 0) {
+        // Enforce only 1 service trade
+        const singleSkill = [skills[0]];
+
         const { error: profileErr } = await supabaseAdmin
           .from('worker_profiles')
           .upsert({
             worker_id: workerId,
-            skills,
+            skills: singleSkill,
             city: 'Bangalore',
             state: 'Karnataka',
             updated_at: new Date().toISOString()
@@ -231,11 +245,45 @@ export async function POST(request: Request) {
 
         if (profileErr) throw profileErr;
 
-        // Explicitly trigger category sync function to verify consistency immediately
+        // Match the single chosen skill to the active service category ID
         try {
-          await supabaseAdmin.rpc('sync_worker_categories_by_skills', { p_worker_id: workerId });
+          const { data: dbCategories } = await supabaseAdmin
+            .from('service_categories')
+            .select('id, name')
+            .eq('is_active', true);
+
+          let matchedCategoryId: string | null = null;
+          if (dbCategories && dbCategories.length > 0) {
+            const skillLower = singleSkill[0].toLowerCase().trim();
+            for (const cat of dbCategories) {
+              const catNameLower = cat.name.toLowerCase().trim();
+              if (
+                skillLower === catNameLower ||
+                skillLower.includes(catNameLower) ||
+                catNameLower.includes(skillLower) ||
+                (skillLower.length >= 4 && catNameLower.length >= 4 && skillLower.slice(0, 4) === catNameLower.slice(0, 4))
+              ) {
+                matchedCategoryId = cat.id;
+                break;
+              }
+            }
+          }
+
+          if (matchedCategoryId) {
+            const { error: workerCatErr } = await supabaseAdmin
+              .from('workers')
+              .update({
+                service_category_ids: [matchedCategoryId],
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', workerId);
+
+            if (workerCatErr) {
+              console.error('[KYC API] Failed to update worker service_category_ids:', workerCatErr);
+            }
+          }
         } catch (err) {
-          console.error('[KYC API] Failed to invoke sync_worker_categories_by_skills:', err);
+          console.error('[KYC API] Exception matching category:', err);
         }
       }
 

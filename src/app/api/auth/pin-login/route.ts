@@ -14,13 +14,15 @@ export async function POST(request: Request) {
     if (!validation.success) return validation.errorResponse;
     const { phone, pin, recaptchaToken } = validation.data;
 
-    // Verify reCAPTCHA token
-    const recaptchaResult = await verifyRecaptchaToken(recaptchaToken || undefined, 'LOGIN');
-    if (!recaptchaResult.success) {
-      return NextResponse.json(
-        { success: false, error: `Verification failed. Please try again. Reason: ${recaptchaResult.reason}` }, 
-        { status: 400, headers: cacheHeaders }
-      );
+    // Verify reCAPTCHA token if provided
+    if (recaptchaToken) {
+      const recaptchaResult = await verifyRecaptchaToken(recaptchaToken, 'LOGIN');
+      if (!recaptchaResult.success) {
+        return NextResponse.json(
+          { success: false, error: `Verification failed. Please try again. Reason: ${recaptchaResult.reason}` }, 
+          { status: 400, headers: cacheHeaders }
+        );
+      }
     }
 
     if (!phone || !pin) {

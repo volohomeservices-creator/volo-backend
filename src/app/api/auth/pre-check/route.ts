@@ -16,14 +16,16 @@ export async function POST(request: Request) {
     }
     const { phone, deviceToken, recaptchaToken } = validation.data;
 
-    // Verify reCAPTCHA token
-    const recaptchaResult = await verifyRecaptchaToken(recaptchaToken || undefined, 'LOGIN');
-    if (!recaptchaResult.success) {
-      console.error('[Pre-Check] reCAPTCHA failed:', recaptchaResult.reason);
-      return NextResponse.json(
-        { error: `Verification failed. Please try again. Reason: ${recaptchaResult.reason}` }, 
-        { status: 400, headers: cacheHeaders }
-      );
+    // Verify reCAPTCHA token if provided
+    if (recaptchaToken) {
+      const recaptchaResult = await verifyRecaptchaToken(recaptchaToken, 'LOGIN');
+      if (!recaptchaResult.success) {
+        console.error('[Pre-Check] reCAPTCHA failed:', recaptchaResult.reason);
+        return NextResponse.json(
+          { error: `Verification failed. Please try again. Reason: ${recaptchaResult.reason}` }, 
+          { status: 400, headers: cacheHeaders }
+        );
+      }
     }
 
     if (!phone) {

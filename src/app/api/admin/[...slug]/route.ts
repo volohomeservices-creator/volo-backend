@@ -1697,6 +1697,13 @@ export async function POST(
 
       if (error || !updatedCategory) throw error;
 
+      if (updateFields.is_active === false) {
+        await supabaseAdmin
+          .from('service_items')
+          .update({ is_active: false })
+          .eq('category_id', categoryId);
+      }
+
       memoryCache.delete('customer_services_default');
 
       await logAuditAction({
@@ -2484,6 +2491,12 @@ export async function DELETE(
             .single();
 
           if (updateErr) throw updateErr;
+
+          // Cascade deactivation to all child service items
+          await supabaseAdmin
+            .from('service_items')
+            .update({ is_active: false })
+            .eq('category_id', categoryId);
 
           memoryCache.delete('customer_services_default');
 
