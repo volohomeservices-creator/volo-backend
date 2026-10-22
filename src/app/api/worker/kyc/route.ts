@@ -219,29 +219,17 @@ export async function POST(request: Request) {
 
       // Save/Update skills in worker_profiles
       if (Array.isArray(skills)) {
-        const { data: existingProfile } = await supabaseAdmin
+        const { error: profileErr } = await supabaseAdmin
           .from('worker_profiles')
-          .select('id')
-          .eq('worker_id', workerId)
-          .maybeSingle();
+          .upsert({
+            worker_id: workerId,
+            skills,
+            city: 'Bangalore',
+            state: 'Karnataka',
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'worker_id' });
 
-        if (existingProfile) {
-          const { error: profileUpdateErr } = await supabaseAdmin
-            .from('worker_profiles')
-            .update({ skills, updated_at: new Date().toISOString() })
-            .eq('worker_id', workerId);
-          if (profileUpdateErr) throw profileUpdateErr;
-        } else {
-          const { error: profileInsertErr } = await supabaseAdmin
-            .from('worker_profiles')
-            .insert({
-              worker_id: workerId,
-              skills,
-              city: 'Bangalore',
-              state: 'Karnataka'
-            });
-          if (profileInsertErr) throw profileInsertErr;
-        }
+        if (profileErr) throw profileErr;
 
         // Explicitly trigger category sync function to verify consistency immediately
         try {

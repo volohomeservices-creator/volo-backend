@@ -34,7 +34,8 @@ export async function GET(request: Request) {
       query = query.in('placement', [
         'HERO', 'PROMO', 'CUSTOMER', 'MOBILE_HERO', 'MOBILE_PROMO', 
         'CUSTOMER_HERO', 'CUSTOMER_PROMO', 'CUSTOMER_ALL', 
-        'ALL', 'ALL_MOBILE', 'UNIVERSAL', 'ALL_HERO', 'UNIVERSAL_HERO', 'ALL_PROMO', 'UNIVERSAL_PROMO'
+        'ALL', 'ALL_MOBILE', 'UNIVERSAL', 'ALL_HERO', 'UNIVERSAL_HERO', 'ALL_PROMO', 'UNIVERSAL_PROMO',
+        'CATALOG_HERO', 'GLOBAL_HERO'
       ]);
     } else if (platform === 'web') {
       query = query.in('placement', [

@@ -1,0 +1,14 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.volohome.app",
+      "sha256_cert_fingerprints": [
+        "55:56:49:98:96:E3:03:D6:E5:4E:BF:6B:41:42:DE:88:2D:B9:14:FE:35:9D:10:B5:A1:5C:8E:E0:82:40:C0:AD",
+        "09:8D:F1:3A:2F:3C:10:42:CE:76:3C:D5:C0:60:45:8F:6A:AB:05:45:B5:2E:1C:EF:9A:E6:91:78:C9:08:96:BA",
+        "49:86:8C:8B:FE:0A:70:49:D7:CF:3A:50:EC:AB:D5:45:60:3F:28:56:E4:06:41:B2:2D:BB:A3:A3:3E:72:3E:74"
+      ]
+    }
+  }
+]

@@ -425,7 +425,7 @@ export async function GET(
             PAN_CARD: 'pan.webp',
             SELFIE_VERIFICATION: 'selfie.webp'
           };
-          path = `worker_${workerId}/${fileMap[doc.document_type]}`;
+          path = doc.file_url || `worker_${workerId}/${fileMap[doc.document_type]}`;
         }
 
         const { data, error } = await supabaseAdmin.storage
@@ -443,7 +443,7 @@ export async function GET(
         .from('worker_kyc')
         .select('*')
         .eq('worker_id', workerId)
-        .single();
+        .maybeSingle();
 
       return NextResponse.json({
         success: true,
