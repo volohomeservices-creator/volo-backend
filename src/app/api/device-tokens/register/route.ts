@@ -13,7 +13,9 @@ export async function POST(request: Request) {
 
     const { data: body, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
-    const { deviceToken, platform = 'web', permissionStatus = 'GRANTED' } = body;
+    const deviceToken = body.deviceToken || body.token || body.device_token;
+    const platform = body.platform || 'web';
+    const permissionStatus = body.permissionStatus || 'GRANTED';
 
     if (!deviceToken) {
       return NextResponse.json({ error: 'Device token is required' }, { status: 400 });

@@ -40,7 +40,7 @@ export async function sendPushNotification({ userId, title, body, data }: PushNo
 
     const tokens = devices.map(d => d.device_token);
 
-    // 2. Prepare message
+    // 2. Prepare high-priority screen-pop message
     const message: MulticastMessage = {
       notification: {
         title,
@@ -48,6 +48,31 @@ export async function sendPushNotification({ userId, title, body, data }: PushNo
       },
       data: data || {},
       tokens,
+      android: {
+        priority: 'high',
+        notification: {
+          channelId: 'volo_urgent_alerts',
+          priority: 'max',
+          defaultSound: true,
+          defaultVibrateTimings: true,
+          visibility: 'public',
+          sound: 'default',
+        },
+      },
+      apns: {
+        headers: {
+          'apns-priority': '10',
+        },
+        payload: {
+          aps: {
+            sound: 'default',
+            alert: {
+              title,
+              body,
+            },
+          },
+        },
+      },
     };
 
     // 3. Send via Firebase Admin Messaging
@@ -122,6 +147,31 @@ export async function sendBulkNotifications({ userIds, title, body, data }: Bulk
       notification: { title, body },
       data: data || {},
       tokens,
+      android: {
+        priority: 'high',
+        notification: {
+          channelId: 'volo_urgent_alerts',
+          priority: 'max',
+          defaultSound: true,
+          defaultVibrateTimings: true,
+          visibility: 'public',
+          sound: 'default',
+        },
+      },
+      apns: {
+        headers: {
+          'apns-priority': '10',
+        },
+        payload: {
+          aps: {
+            sound: 'default',
+            alert: {
+              title,
+              body,
+            },
+          },
+        },
+      },
     };
 
     const response = await adminMessaging.sendEachForMulticast(message);
