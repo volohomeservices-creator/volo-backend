@@ -52,10 +52,10 @@ export async function POST(request: Request) {
         // Concurrent requests will affect 0 rows and gracefully exit.
         const { data: updatedPayment, error: updateError } = await supabaseAdmin
           .from('payments')
-          .update({ 
+          .update({
             status: 'SUCCESS',
             razorpay_payment_id: paymentId,
-            razorpay_signature: signature 
+            razorpay_signature: signature
           })
           .eq('razorpay_order_id', orderId)
           .neq('status', 'SUCCESS')
@@ -88,7 +88,7 @@ export async function POST(request: Request) {
             userId: booking.customer_id,
             type: 'BOOKING_CREATED',
             title: 'Payment received',
-            body: 'Your payment is confirmed. We are assigning a technician.',
+            body: 'Your payment is confirmed. We are assigning a captain.',
           });
         }
       }

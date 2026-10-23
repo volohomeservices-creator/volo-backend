@@ -193,6 +193,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Failed to record bank account. Please check your details.' }, { status: 500 });
     }
 
+    // Sync with workers table so KYC page and admin worker view stay 100% updated
+    try {
+      await supabaseAdmin
+        .from('workers')
+        .update({
+          bank_account_name: rawHolder,
+          bank_account_number: cleanAccountNo,
+          bank_ifsc: cleanIfsc,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', session.user_id);
+    } catch (syncErr) {
+      console.error('[Worker Bank Sync Error]:', syncErr);
+    }
+
     // 8. AUDIT LOG (NEVER LOG FULL ACCOUNT NUMBERS)
     await logAuditAction({
       admin_id: session.user_id,

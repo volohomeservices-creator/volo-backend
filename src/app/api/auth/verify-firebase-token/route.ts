@@ -36,13 +36,15 @@ export async function POST(request: Request) {
     }
 
     // E.164 phone normalization
-    const formattedPhone = phone.startsWith('+91') ? phone : `+91${phone}`;
+    const clean10Digits = phone.replace(/\D/g, '').slice(-10);
+    const formattedPhone = `+91${clean10Digits}`;
+    const phoneVariants = Array.from(new Set([phone, formattedPhone, clean10Digits]));
 
-    // 2. Query Existing User
+    // 2. Query Existing User across phone variants
     const { data: existingUser, error: fetchErr } = await supabaseAdmin
       .from('users')
       .select('*')
-      .eq('phone', formattedPhone)
+      .in('phone', phoneVariants)
       .maybeSingle();
 
     let user_id = '';
@@ -135,7 +137,12 @@ export async function POST(request: Request) {
 
       // Check if role matches
       if (existingUser.role !== role) {
-        return NextResponse.json({ error: 'UNAUTHORIZED_ROLE' }, { status: 403, headers: cacheHeaders });
+        const registeredPortal = existingUser.role === 'customer' ? 'Customer Portal' : 'Partner Portal';
+        return NextResponse.json({
+          error: 'UNAUTHORIZED_ROLE',
+          code: 'UNAUTHORIZED_ROLE',
+          message: `This phone number is registered as a ${existingUser.role === 'customer' ? 'Customer' : 'Partner'}. Please switch to the ${registeredPortal}.`
+        }, { status: 403, headers: cacheHeaders });
       }
     }
 

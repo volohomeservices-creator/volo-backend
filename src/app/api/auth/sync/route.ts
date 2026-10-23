@@ -98,6 +98,13 @@ export async function POST(request: Request) {
           .maybeSingle();
 
         if (userByPhone) {
+          if (userByPhone.role !== role) {
+            const registeredPortal = userByPhone.role === 'customer' ? 'Customer Portal' : 'Partner Portal';
+            return NextResponse.json({
+              error: 'UNAUTHORIZED_ROLE',
+              message: `This phone number is registered as a ${userByPhone.role === 'customer' ? 'Customer' : 'Partner'}. Please switch to the ${registeredPortal}.`
+            }, { status: 403 });
+          }
           user_id = userByPhone.id;
           is_active = userByPhone.is_active;
           current_full_name = userByPhone.full_name || '';
@@ -174,7 +181,11 @@ export async function POST(request: Request) {
 
       // Check if role matches
       if (existingUser.role !== role) {
-        return NextResponse.json({ error: 'UNAUTHORIZED_ROLE' }, { status: 403 });
+        const registeredPortal = existingUser.role === 'customer' ? 'Customer Portal' : 'Partner Portal';
+        return NextResponse.json({
+          error: 'UNAUTHORIZED_ROLE',
+          message: `This phone number is registered as a ${existingUser.role === 'customer' ? 'Customer' : 'Partner'}. Please switch to the ${registeredPortal}.`
+        }, { status: 403 });
       }
     } else {
       return NextResponse.json({ error: 'Database verification error' }, { status: 500 });

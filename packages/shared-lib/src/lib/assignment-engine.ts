@@ -137,7 +137,7 @@ export async function startAssignment(bookingId: string): Promise<string> {
   const group1 = typedWorkers;
 
   // 6. Insert into assignment_queue
-  const expiresAt = new Date(Date.now() + 180000).toISOString(); // 3m (180s)
+  const expiresAt = new Date(Date.now() + 120000).toISOString(); // 2m (120s)
   
   const { data: queue, error: queueErr } = await supabaseAdmin
     .from('assignment_queue')
@@ -328,7 +328,7 @@ export async function advanceAssignment(queueId: string): Promise<string> {
 
     if (checkGroup <= 3 && checkGroupWorkers.length > 0) {
       const newAllNotified = [...(queue.all_notified_workers || []), ...checkGroupWorkers.map(w => w.worker_id)];
-      const expiresAt = new Date(Date.now() + 180000).toISOString(); // 3m (180s)
+      const expiresAt = new Date(Date.now() + 120000).toISOString(); // 2m (120s)
 
       await supabaseAdmin
         .from('assignment_queue')

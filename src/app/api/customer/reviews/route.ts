@@ -77,7 +77,7 @@ export async function POST(request: Request) {
     }
 
     if (!booking.worker_id) {
-      return NextResponse.json({ error: 'No technician was assigned to this booking.' }, { status: 400 });
+      return NextResponse.json({ error: 'No captain was assigned to this booking.' }, { status: 400 });
     }
 
     const workerId = booking.worker_id;
@@ -116,7 +116,7 @@ export async function POST(request: Request) {
 
     if (!aggErr && allReviews && allReviews.length > 0) {
       const avgRating = allReviews.reduce((sum, r) => sum + Number(r.rating), 0) / allReviews.length;
-      
+
       // Update workers rating
       await supabaseAdmin
         .from('workers')

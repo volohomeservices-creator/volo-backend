@@ -7,18 +7,20 @@ import { PHONE_REGEX, UUID_REGEX } from './zod-validator';
 
 export const pinLoginSchema = z.object({
   phone: z.string().regex(PHONE_REGEX, 'Invalid Indian phone number format (+91XXXXXXXXXX)'),
-  pin: z.string().length(4, 'PIN must be 4 digits').regex(/^\d+$/, 'PIN must be numeric'),
+  pin: z.string().min(4, 'PIN must be at least 4 digits').max(6, 'PIN must be at most 6 digits').regex(/^\d+$/, 'PIN must be numeric'),
+  role: z.enum(['customer', 'worker']).optional().nullable(),
   recaptchaToken: z.string().optional().nullable()
 });
 
 export const preCheckSchema = z.object({
   phone: z.string().regex(PHONE_REGEX, 'Invalid Indian phone number format (+91XXXXXXXXXX)'),
+  role: z.enum(['customer', 'worker']).optional().nullable(),
   deviceToken: z.string().optional().nullable(),
   recaptchaToken: z.string().optional().nullable()
 });
 
 export const setPinSchema = z.object({
-  pin: z.string().length(4, 'PIN must be 4 digits').regex(/^\d+$/, 'PIN must be numeric')
+  pin: z.string().min(4, 'PIN must be at least 4 digits').max(6, 'PIN must be at most 6 digits').regex(/^\d+$/, 'PIN must be numeric')
 });
 
 export const adminLoginSchema = z.object({
@@ -41,17 +43,17 @@ export const customerProfileUpdateSchema = z.object({
 }).strict();
 
 export const customerAddressSchema = z.object({
-  label: z.string().min(1).max(50).optional(),
-  address: z.string().min(5).max(255),
-  city: z.string().min(2).max(100),
-  state: z.string().min(2).max(100),
-  pincode: z.string().min(4).max(20),
-  latitude: z.number().min(-90).max(90).optional(),
-  longitude: z.number().min(-180).max(180).optional(),
+  label: z.string().min(1).max(50).optional().default('HOME'),
+  address: z.string().min(1).max(1000),
+  city: z.string().max(100).optional().nullable(),
+  state: z.string().max(100).optional().nullable(),
+  pincode: z.string().max(20).optional().nullable(),
+  latitude: z.union([z.number(), z.string().transform(v => parseFloat(v))]).optional().nullable(),
+  longitude: z.union([z.number(), z.string().transform(v => parseFloat(v))]).optional().nullable(),
   is_default: z.boolean().optional(),
-  place_id: z.string().optional(),
-  formatted_address: z.string().optional()
-}).strict();
+  place_id: z.string().optional().nullable(),
+  formatted_address: z.string().optional().nullable()
+});
 
 // ---------------------------------------------------------
 // Worker Schemas

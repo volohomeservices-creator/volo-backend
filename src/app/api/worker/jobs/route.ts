@@ -58,7 +58,10 @@ export async function GET(request: Request) {
 
       if (manualErr) throw manualErr;
 
-      // C. Fetch all active broadcasting bookings
+      const nowIso = new Date().toISOString();
+      const nowMs = Date.now();
+
+      // C. Fetch all active broadcasting bookings that have NOT expired
       const { data: broadcastingBookings, error: broadcastErr } = await supabaseAdmin
         .from('bookings')
         .select(`
@@ -68,16 +71,32 @@ export async function GET(request: Request) {
           assignment_queue!inner(status, group_workers, group_expires_at)
         `)
         .eq('status', 'PENDING_ASSIGNMENT')
-        .eq('assignment_queue.status', 'BROADCASTING');
+        .eq('assignment_queue.status', 'BROADCASTING')
+        .gt('assignment_queue.group_expires_at', nowIso);
 
       if (broadcastErr) throw broadcastErr;
 
+      // Lazy cleanup of any stale broadcasting queues in the background
+      supabaseAdmin
+        .from('assignment_queue')
+        .update({ status: 'FAILED', updated_at: nowIso })
+        .eq('status', 'BROADCASTING')
+        .lt('group_expires_at', nowIso)
+        .then(() => {});
+
       // D. Filter broadcasting bookings in memory:
+      // - Must not be expired (2-minute window)
       // - Worker must be in the current group of the queue
       // - Worker must not have rejected this booking
       // - Booking category must match worker's assigned categories
       const eligibleBroadcastBookings = (broadcastingBookings || []).filter((b: any) => {
         if (rejectedBookingIds.has(b.id)) return false;
+
+        const expiresAtMs = b.assignment_queue?.group_expires_at 
+          ? new Date(b.assignment_queue.group_expires_at).getTime() 
+          : new Date(b.created_at).getTime() + 120000;
+
+        if (expiresAtMs <= nowMs) return false;
 
         if (workerCategories.length > 0 && b.service_items?.category_id) {
           if (!workerCategories.includes(b.service_items.category_id)) {
@@ -91,6 +110,10 @@ export async function GET(request: Request) {
       });
 
       const filteredManualBookings = (manuallyAssignedBookings || []).filter((b: any) => {
+        // Enforce 2 minutes window (120,000 ms) for manual assignments
+        const assignedTime = new Date(b.updated_at || b.created_at).getTime();
+        if (nowMs - assignedTime > 120000) return false;
+
         if (workerCategories.length > 0 && b.service_items?.category_id) {
           return workerCategories.includes(b.service_items.category_id);
         }
@@ -121,7 +144,7 @@ export async function GET(request: Request) {
           created_at: b.created_at,
           estimated_earnings: Number((b.total_amount * 0.85).toFixed(2)),
           status: b.status,
-          expiresAt: b.assignment_queue?.group_expires_at || null
+          expiresAt: b.assignment_queue?.group_expires_at || new Date(new Date(b.updated_at || b.created_at).getTime() + 120000).toISOString()
         };
       })
       .sort((a, b) => a.distance_km - b.distance_km);

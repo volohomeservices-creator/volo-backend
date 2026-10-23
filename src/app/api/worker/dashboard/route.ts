@@ -55,6 +55,7 @@ export async function GET(request: Request) {
       `)
       .eq('status', 'PENDING_ASSIGNMENT')
       .eq('assignment_queue.status', 'BROADCASTING')
+      .gt('assignment_queue.group_expires_at', new Date().toISOString())
     ]);
 
     const worker = workerRes.data;
@@ -132,8 +133,17 @@ export async function GET(request: Request) {
 
     const rejectedBookingIds = new Set((rejectionsRes.data || []).map(r => r.booking_id));
 
+    const nowMs = Date.now();
     const eligibleBroadcastBookings = (broadcastingRes.data || []).filter((b: any) => {
       if (rejectedBookingIds.has(b.id)) return false;
+
+      const groupExpires = b.assignment_queue?.group_expires_at ? new Date(b.assignment_queue.group_expires_at).getTime() : 0;
+      if (groupExpires && groupExpires <= nowMs) {
+        return false;
+      }
+      if (!groupExpires && (nowMs - new Date(b.created_at).getTime() > 120000)) {
+        return false;
+      }
 
       const groupWorkers = b.assignment_queue?.group_workers || [];
       const isInGroup = groupWorkers.some((gw: any) => gw.worker_id === workerId);
@@ -166,7 +176,7 @@ export async function GET(request: Request) {
         scheduled_at: b.scheduled_at || b.created_at,
         estimated_earnings: Number((b.total_amount * 0.85).toFixed(2)),
         status: b.status,
-        expiresAt: b.assignment_queue?.group_expires_at
+        expiresAt: b.assignment_queue?.group_expires_at || new Date(new Date(b.created_at).getTime() + 120000).toISOString()
       };
     })
     .sort((a, b) => a.distance_km - b.distance_km);

@@ -385,7 +385,7 @@ export async function POST(request: Request) {
       bookingId: booking.id,
       slug,
       message: razorpayCheckout
-        ? 'Complete the Razorpay payment to dispatch a technician.'
+        ? 'Complete the Razorpay payment to dispatch a captain.'
         : 'Booking created successfully.',
       ...(razorpayCheckout ? { razorpay: razorpayCheckout } : {}),
     });

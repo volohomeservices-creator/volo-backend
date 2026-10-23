@@ -374,9 +374,11 @@ export async function GET(
             AADHAAR_FRONT: 'aadhaar-front.webp',
             AADHAAR_BACK: 'aadhaar-back.webp',
             PAN_CARD: 'pan.webp',
-            SELFIE_VERIFICATION: 'selfie.webp'
+            SELFIE_VERIFICATION: 'selfie.webp',
+            EXPERIENCE_CERTIFICATE: 'certificate.webp',
+            CERTIFICATE: 'certificate.webp'
           };
-          path = doc.file_url || `worker_${workerId}/${fileMap[doc.document_type]}`;
+          path = doc.file_url || `worker_${workerId}/${fileMap[doc.document_type] || 'certificate.webp'}`;
         }
 
         const { data } = await supabaseAdmin.storage
@@ -414,6 +416,8 @@ export async function GET(
         aadhar_back_url: getSignedUrlForType('AADHAAR_BACK') || workerData.aadhar_back_url,
         pan_url: getSignedUrlForType('PAN_CARD') || workerData.pan_url,
         selfie_url: getSignedUrlForType('SELFIE_VERIFICATION') || workerData.selfie_url,
+        certificate_url: getSignedUrlForType('EXPERIENCE_CERTIFICATE') || getSignedUrlForType('CERTIFICATE') || workerData.certificate_url,
+        experience_years: workerData.experience_years || 0,
         bank_account_name: workerData.bank_account_name,
         bank_account_number: maskBankAcc(workerData.bank_account_number),
         bank_ifsc: workerData.bank_ifsc,
@@ -1720,7 +1724,7 @@ export async function POST(
     // A. services
 
     if (slug[0] === 'services' && slug.length === 1) {
-      const { data: { category_id, name, description, base_price, estimated_mins }, errorResponse } = await validateBody(request, z.any());
+      const { data: { category_id, name, description, base_price, estimated_mins, icon_url }, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
 
       if (!category_id || !name || !base_price) {
@@ -1735,6 +1739,7 @@ export async function POST(
           description,
           base_price,
           estimated_mins: estimated_mins || 60,
+          icon_url: icon_url || null,
           is_active: true
         })
         .select('*')
@@ -1934,20 +1939,26 @@ export async function POST(
 
       // Update specific checklists if fieldApproval is provided
       if (fieldApproval) {
+        const kycFieldsToUpdate: any = {
+          aadhaar_status: fieldApproval.aadhaar || status,
+          pan_status: fieldApproval.pan || status,
+          selfie_status: fieldApproval.selfie || status
+        };
+        if (fieldApproval.certificate) {
+          kycFieldsToUpdate.certificate_status = fieldApproval.certificate;
+        }
+
         await supabaseAdmin
           .from('worker_kyc')
-          .update({
-            aadhaar_status: fieldApproval.aadhaar || status,
-            pan_status: fieldApproval.pan || status,
-            selfie_status: fieldApproval.selfie || status
-          })
+          .update(kycFieldsToUpdate)
           .eq('worker_id', workerId);
 
         // Update individual document statuses in worker_documents
         const docTypes = {
           aadhaar: ['AADHAAR_FRONT', 'AADHAAR_BACK'],
           pan: ['PAN_CARD'],
-          selfie: ['SELFIE_VERIFICATION']
+          selfie: ['SELFIE_VERIFICATION'],
+          certificate: ['EXPERIENCE_CERTIFICATE', 'CERTIFICATE']
         };
 
         for (const [field, types] of Object.entries(docTypes)) {

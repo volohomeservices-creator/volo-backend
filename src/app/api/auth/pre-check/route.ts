@@ -14,7 +14,7 @@ export async function POST(request: Request) {
       console.error('[Pre-Check] Validation failed:', validation.errorResponse);
       return validation.errorResponse;
     }
-    const { phone, deviceToken, recaptchaToken } = validation.data;
+    const { phone, role, deviceToken, recaptchaToken } = validation.data;
 
     // Verify reCAPTCHA token if provided
     if (recaptchaToken) {
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     // Query user from database across phone variants
     const { data: user, error } = await supabaseAdmin
       .from('users')
-      .select('id, email, is_active, is_suspended, pin_hash')
+      .select('id, email, is_active, is_suspended, pin_hash, role')
       .in('phone', phoneVariants)
       .maybeSingle();
 
@@ -56,6 +56,16 @@ export async function POST(request: Request) {
         isRegistered: false,
         hasEmail: false
       }, { headers: cacheHeaders });
+    }
+
+    // Check if account role matches the requested portal role
+    if (role && user.role !== role) {
+      const registeredPortal = user.role === 'customer' ? 'Customer Portal' : 'Partner Portal';
+      return NextResponse.json({
+        error: 'UNAUTHORIZED_ROLE',
+        userRole: user.role,
+        message: `This phone number is registered as a ${user.role === 'customer' ? 'Customer' : 'Partner'}. Please switch to the ${registeredPortal} to continue.`
+      }, { status: 403, headers: cacheHeaders });
     }
 
     // Check if account is active and not suspended
