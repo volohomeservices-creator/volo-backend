@@ -34,8 +34,8 @@ export async function checkBookingGeofences(
           await dispatchNotification({
             userId: customerUserId,
             type: 'WORKER_NEARBY',
-            title: 'Technician is nearby!',
-            body: 'Your technician is less than 500 meters away and will arrive shortly.',
+            title: 'captain is nearby!',
+            body: 'Your captain is less than 500 meters away and will arrive shortly.',
             data: { booking_id: bookingId, worker_id: workerId },
           });
         }
@@ -102,8 +102,8 @@ export async function checkBookingGeofences(
                 await dispatchNotification({
                   userId: customerUserId,
                   type: 'WORKER_ARRIVED',
-                  title: 'Technician Arrived',
-                  body: 'Your technician has arrived at your location. Please share the OTP code to start the service.',
+                  title: 'captain Arrived',
+                  body: 'Your captain has arrived at your location. Please share the OTP code to start the service.',
                   data: { booking_id: bookingId, worker_id: workerId },
                 });
               }

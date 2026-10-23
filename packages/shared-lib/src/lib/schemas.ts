@@ -7,18 +7,20 @@ import { PHONE_REGEX, UUID_REGEX } from './zod-validator';
 
 export const pinLoginSchema = z.object({
   phone: z.string().regex(PHONE_REGEX, 'Invalid Indian phone number format (+91XXXXXXXXXX)'),
-  pin: z.string().length(4, 'PIN must be 4 digits').regex(/^\d+$/, 'PIN must be numeric'),
+  pin: z.string().min(4, 'PIN must be at least 4 digits').max(6, 'PIN must be at most 6 digits').regex(/^\d+$/, 'PIN must be numeric'),
+  role: z.enum(['customer', 'worker']).optional().nullable(),
   recaptchaToken: z.string().optional().nullable()
 });
 
 export const preCheckSchema = z.object({
   phone: z.string().regex(PHONE_REGEX, 'Invalid Indian phone number format (+91XXXXXXXXXX)'),
+  role: z.enum(['customer', 'worker']).optional().nullable(),
   deviceToken: z.string().optional().nullable(),
   recaptchaToken: z.string().optional().nullable()
 });
 
 export const setPinSchema = z.object({
-  pin: z.string().length(4, 'PIN must be 4 digits').regex(/^\d+$/, 'PIN must be numeric')
+  pin: z.string().min(4, 'PIN must be at least 4 digits').max(6, 'PIN must be at most 6 digits').regex(/^\d+$/, 'PIN must be numeric')
 });
 
 export const adminLoginSchema = z.object({

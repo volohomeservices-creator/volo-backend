@@ -260,8 +260,8 @@ export async function acceptManualAssignmentOffer(
     dispatchNotification({
       userId: booking.customer_id,
       type: 'MANUAL_ASSIGNMENT_ACCEPTED',
-      title: 'Technician Dispatched',
-      body: 'Your manually assigned technician has accepted the order.'
+      title: 'captain Dispatched',
+      body: 'Your manually assigned captain has accepted the order.'
     }),
     dispatchNotification({
       userId: offer.assigned_by,
@@ -333,7 +333,7 @@ export async function rejectManualAssignmentOffer(
     userId: offer.assigned_by,
     type: 'MANUAL_ASSIGNMENT_REJECTED',
     title: 'Manual Offer Rejected',
-    body: `Technician rejected your manual offer for booking ${bookingId}. Reason: ${reason || 'None'}`
+    body: `captain rejected your manual offer for booking ${bookingId}. Reason: ${reason || 'None'}`
   });
 
   // 5. Log Audit Action

@@ -47,7 +47,7 @@ export async function POST(request: Request) {
           userId: customerId,
           type: 'BOOKING_CREATED',
           title: 'Payment received',
-          body: 'Your payment is confirmed. We are assigning a technician.',
+          body: 'Your payment is confirmed. We are assigning a captain.',
         });
       }
     }

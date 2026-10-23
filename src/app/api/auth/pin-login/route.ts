@@ -12,7 +12,7 @@ export async function POST(request: Request) {
   try {
     const validation = await validateBody(request, pinLoginSchema);
     if (!validation.success) return validation.errorResponse;
-    const { phone, pin, recaptchaToken } = validation.data;
+    const { phone, pin, role, recaptchaToken } = validation.data;
 
     // Verify reCAPTCHA token if provided
     if (recaptchaToken) {
@@ -58,6 +58,16 @@ export async function POST(request: Request) {
 
     if (!user.is_active || user.is_suspended) {
       return NextResponse.json({ error: 'ACCOUNT_BLOCKED' }, { status: 403, headers: cacheHeaders });
+    }
+
+    // Verify requested portal role matches user registered role
+    if (role && user.role !== role) {
+      const registeredPortal = user.role === 'customer' ? 'Customer Portal' : 'Partner Portal';
+      return NextResponse.json({
+        success: false,
+        code: 'UNAUTHORIZED_ROLE',
+        error: `This account is registered as a ${user.role === 'customer' ? 'Customer' : 'Partner'}. Please log in through the ${registeredPortal}.`
+      }, { status: 403, headers: cacheHeaders });
     }
 
     if (!user.pin_hash) {

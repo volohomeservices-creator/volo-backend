@@ -232,13 +232,13 @@ export async function PATCH(
     // Send customer notification
     let notificationTitle = '';
     let notificationBody = '';
-    
+
     if (status === 'ON_THE_WAY') {
-      notificationTitle = 'Technician En Route';
-      notificationBody = 'Your technician is on the way to your location.';
+      notificationTitle = 'captain En Route';
+      notificationBody = 'Your captain is on the way to your location.';
     } else if (status === 'ARRIVED') {
-      notificationTitle = 'Technician Arrived';
-      notificationBody = 'Your technician has arrived. Share your OTP to begin the service.';
+      notificationTitle = 'captain Arrived';
+      notificationBody = 'Your captain has arrived. Share your OTP to begin the service.';
     } else if (status === 'COMPLETED') {
       notificationTitle = 'Service Request Completed';
       notificationBody = 'Your home service booking has been marked completed. Thank you!';

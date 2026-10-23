@@ -149,7 +149,7 @@ export async function PATCH(
       // Customer can only cancel until a worker is assigned
       if (booking.status !== 'PENDING_ASSIGNMENT' || booking.worker_id) {
         return NextResponse.json({
-          error: 'Cannot cancel booking once a technician has been assigned.'
+          error: 'Cannot cancel booking once a captain has been assigned.'
         }, { status: 400 });
       }
 
@@ -160,7 +160,7 @@ export async function PATCH(
 
       if (elapsedMs > bufferMs) {
         return NextResponse.json({
-          error: 'Cancellation buffer expired. Bookings can only be cancelled within 3 minutes of placement and before technician assignment.'
+          error: 'Cancellation buffer expired. Bookings can only be cancelled within 3 minutes of placement and before captain assignment.'
         }, { status: 400 });
       }
 
