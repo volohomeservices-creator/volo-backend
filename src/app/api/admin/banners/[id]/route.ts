@@ -5,6 +5,30 @@ import { requireRole } from '@/lib/auth';
 import { supabaseAdmin as supabaseAdminOriginal } from '@/lib/supabase-server';
 import { invalidateBannerCache } from '@/lib/cache';
 const supabaseAdmin: any = supabaseAdminOriginal;
+export async function GET(request: Request, props: { params: Promise<{ id: string }> }) {
+  try {
+    await requireRole(request, 'admin');
+    const { id } = await props.params;
+
+    const { data: banner, error } = await supabaseAdmin
+      .from('mobile_banners')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error || !banner) {
+      return NextResponse.json({ error: 'Banner not found' }, { status: 404 });
+    }
+
+    return NextResponse.json({ success: true, banner });
+  } catch (error: any) {
+    console.error('Error fetching mobile banner:', error.message || error);
+    return NextResponse.json(
+      { error: error.message || 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
 
 export async function PUT(request: Request, props: { params: Promise<{ id: string }> }) {
   try {

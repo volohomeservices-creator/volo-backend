@@ -356,6 +356,44 @@ export async function GET(
 
       const kycSync = await getWorkerKycSync(workerId, workerData.kyc_status);
 
+      // Fetch documents metadata and generate signed URLs
+      const { data: workerDocs } = await supabaseAdmin
+        .from('worker_documents')
+        .select('*')
+        .eq('worker_id', workerId);
+
+      const docsWithUrls = await Promise.all((workerDocs || []).map(async (doc: any) => {
+        let bucket = 'kyc-docs';
+        let path = '';
+        if (doc.document_type === 'PROFILE_PHOTO') {
+          bucket = 'profile-images';
+          path = `worker_${workerId}/profile.webp`;
+        } else {
+          bucket = 'kyc-docs';
+          const fileMap: Record<string, string> = {
+            AADHAAR_FRONT: 'aadhaar-front.webp',
+            AADHAAR_BACK: 'aadhaar-back.webp',
+            PAN_CARD: 'pan.webp',
+            SELFIE_VERIFICATION: 'selfie.webp'
+          };
+          path = doc.file_url || `worker_${workerId}/${fileMap[doc.document_type]}`;
+        }
+
+        const { data } = await supabaseAdmin.storage
+          .from(bucket)
+          .createSignedUrl(path, 900);
+
+        return {
+          ...doc,
+          signedUrl: data?.signedUrl || null
+        };
+      }));
+
+      const getSignedUrlForType = (docType: string) => {
+        const found = docsWithUrls.find((d: any) => d.document_type === docType);
+        return found?.signedUrl || null;
+      };
+
       // Mask bank account number securely for display
       const maskBankAcc = (acc: string | null) => {
         if (!acc) return '';
@@ -371,10 +409,11 @@ export async function GET(
         status: workerData.status,
         kyc_status: workerData.kyc_status,
         kyc_sync: kycSync,
-        aadhar_front_url: workerData.aadhar_front_url,
-        aadhar_back_url: workerData.aadhar_back_url,
-        pan_url: workerData.pan_url,
-        selfie_url: workerData.selfie_url,
+        documents: docsWithUrls,
+        aadhar_front_url: getSignedUrlForType('AADHAAR_FRONT') || workerData.aadhar_front_url,
+        aadhar_back_url: getSignedUrlForType('AADHAAR_BACK') || workerData.aadhar_back_url,
+        pan_url: getSignedUrlForType('PAN_CARD') || workerData.pan_url,
+        selfie_url: getSignedUrlForType('SELFIE_VERIFICATION') || workerData.selfie_url,
         bank_account_name: workerData.bank_account_name,
         bank_account_number: maskBankAcc(workerData.bank_account_number),
         bank_ifsc: workerData.bank_ifsc,
@@ -425,7 +464,7 @@ export async function GET(
             PAN_CARD: 'pan.webp',
             SELFIE_VERIFICATION: 'selfie.webp'
           };
-          path = `worker_${workerId}/${fileMap[doc.document_type]}`;
+          path = doc.file_url || `worker_${workerId}/${fileMap[doc.document_type]}`;
         }
 
         const { data, error } = await supabaseAdmin.storage
@@ -443,7 +482,7 @@ export async function GET(
         .from('worker_kyc')
         .select('*')
         .eq('worker_id', workerId)
-        .single();
+        .maybeSingle();
 
       return NextResponse.json({
         success: true,
@@ -1658,6 +1697,13 @@ export async function POST(
 
       if (error || !updatedCategory) throw error;
 
+      if (updateFields.is_active === false) {
+        await supabaseAdmin
+          .from('service_items')
+          .update({ is_active: false })
+          .eq('category_id', categoryId);
+      }
+
       memoryCache.delete('customer_services_default');
 
       await logAuditAction({
@@ -2445,6 +2491,12 @@ export async function DELETE(
             .single();
 
           if (updateErr) throw updateErr;
+
+          // Cascade deactivation to all child service items
+          await supabaseAdmin
+            .from('service_items')
+            .update({ is_active: false })
+            .eq('category_id', categoryId);
 
           memoryCache.delete('customer_services_default');
 

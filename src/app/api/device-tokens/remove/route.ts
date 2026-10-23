@@ -6,14 +6,23 @@ import { supabaseAdmin } from '@/lib/supabase-server';
 import { logAuditAction } from '@/lib/audit';
 import { AuditAction } from '@/types';
 
-export async function POST(request: Request) {
+async function handleRemove(request: Request) {
   try {
     const session = await requireSession(request);
     const userId = session.user_id;
 
-    const { data: body, errorResponse } = await validateBody(request, z.any());
-    if (errorResponse) return errorResponse;
-    const { deviceToken } = body;
+    const url = new URL(request.url);
+    const queryToken = url.searchParams.get('token') || url.searchParams.get('deviceToken');
+
+    let bodyToken = '';
+    try {
+      const body = await request.json();
+      bodyToken = body.deviceToken || body.token;
+    } catch {
+      // Body may be empty for DELETE
+    }
+
+    const deviceToken = queryToken || bodyToken;
 
     if (!deviceToken) {
       return NextResponse.json({ error: 'Device token is required' }, { status: 400 });
@@ -49,3 +58,7 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export const POST = handleRemove;
+export const DELETE = handleRemove;
+

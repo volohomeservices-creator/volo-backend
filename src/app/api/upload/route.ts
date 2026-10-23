@@ -14,11 +14,12 @@ export async function POST(request: Request) {
 
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
+    const contentType = path.toLowerCase().endsWith('.webp') ? 'image/webp' : (file.type || 'image/webp');
 
     const { data: uploadData, error: uploadErr } = await supabaseAdmin.storage
       .from(bucket)
       .upload(path, buffer, {
-        contentType: file.type || 'image/webp',
+        contentType,
         cacheControl: '3600',
         upsert: true
       });
