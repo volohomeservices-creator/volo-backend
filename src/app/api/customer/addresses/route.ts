@@ -32,6 +32,7 @@ export async function POST(request: Request) {
   try {
     const session = await requireRole(request, 'customer');
     const customerId = session.user_id;
+    // Validate payload against customerAddressSchema with defaults
     const validation = await validateBody(request, customerAddressSchema);
     if (!validation.success) return validation.errorResponse;
     const body = validation.data;

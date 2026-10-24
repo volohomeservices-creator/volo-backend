@@ -37,17 +37,17 @@ export const customerProfileUpdateSchema = z.object({
   email: z.string().email().optional(),
   address: z.string().max(255).optional(),
   avatar_url: z.string().url().or(z.string().length(0)).optional(),
-  city: z.string().max(100).optional(),
-  state: z.string().max(100).optional(),
-  pincode: z.string().max(20).optional()
+  city: z.string().max(100).optional().nullable().default('Bangalore'),
+  state: z.string().max(100).optional().nullable().default('Karnataka'),
+  pincode: z.string().max(20).optional().nullable().default('560001')
 }).strict();
 
 export const customerAddressSchema = z.object({
   label: z.string().min(1).max(50).optional().default('HOME'),
   address: z.string().min(1).max(1000),
-  city: z.string().max(100).optional().nullable(),
-  state: z.string().max(100).optional().nullable(),
-  pincode: z.string().max(20).optional().nullable(),
+  city: z.string().max(100).optional().nullable().default('Bangalore'),
+  state: z.string().max(100).optional().nullable().default('Karnataka'),
+  pincode: z.string().max(20).optional().nullable().default('560001'),
   latitude: z.union([z.number(), z.string().transform(v => parseFloat(v))]).optional().nullable(),
   longitude: z.union([z.number(), z.string().transform(v => parseFloat(v))]).optional().nullable(),
   is_default: z.boolean().optional(),
