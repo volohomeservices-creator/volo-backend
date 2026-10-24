@@ -28,7 +28,7 @@ export async function GET(
     }
 
     const queueData = Array.isArray(booking.assignment_queue) ? booking.assignment_queue[0] : (booking.assignment_queue as any);
-    const expiresAt = queueData?.group_expires_at || (booking.status === 'PENDING_ASSIGNMENT' ? new Date(new Date(booking.created_at).getTime() + 180000).toISOString() : null);
+    const expiresAt = queueData?.group_expires_at || (booking.status === 'PENDING_ASSIGNMENT' ? new Date(new Date(booking.created_at).getTime() + 120000).toISOString() : null);
 
     return NextResponse.json({
       id: booking.id,

@@ -32,6 +32,7 @@ export async function POST(request: Request) {
   try {
     const session = await requireRole(request, 'customer');
     const customerId = session.user_id;
+    // Validate payload against customerAddressSchema with defaults
     const validation = await validateBody(request, customerAddressSchema);
     if (!validation.success) return validation.errorResponse;
     const body = validation.data;
@@ -40,6 +41,9 @@ export async function POST(request: Request) {
     if (!label || !address) {
       return NextResponse.json({ error: 'Label and Address are required.' }, { status: 400 });
     }
+
+    const rawLabel = (label || 'HOME').trim().toUpperCase();
+    const finalLabel = ['HOME', 'WORK', 'OTHER'].includes(rawLabel) ? rawLabel : 'OTHER';
 
     let lat = Number(latitude || 12.9716);
     let lng = Number(longitude || 77.5946);
@@ -53,18 +57,29 @@ export async function POST(request: Request) {
       }
     }
 
+    let finalIsDefault = !!is_default;
+    if (!finalIsDefault) {
+      const { count } = await supabaseAdmin
+        .from('customer_addresses')
+        .select('id', { count: 'exact', head: true })
+        .eq('customer_id', customerId);
+      if (!count || count === 0) {
+        finalIsDefault = true;
+      }
+    }
+
     // Insert new address
     const { data: newAddr, error } = await supabaseAdmin
       .from('customer_addresses')
       .insert({
         customer_id: customerId,
-        label,
-        address,
+        label: finalLabel,
+        address: address.trim(),
         latitude: lat,
         longitude: lng,
-        is_default: !!is_default,
+        is_default: finalIsDefault,
         place_id: place_id || null,
-        formatted_address: formatted_address || address
+        formatted_address: formatted_address || address.trim()
       })
       .select()
       .single();

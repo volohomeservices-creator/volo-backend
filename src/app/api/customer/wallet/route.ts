@@ -65,84 +65,13 @@ export async function GET(request: Request) {
   }
 }
 
-// Simulated top-up route for customer testing
+// Direct unverified top-up is disabled for security. All top-ups must go through Razorpay.
 export async function POST(request: Request) {
-  try {
-    const session = await requireRole(request, 'customer');
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    const customerId = session.user_id;
-    const { data: body, errorResponse } = await validateBody(request, z.any());
-    if (errorResponse) return errorResponse;
-    const amount = Number(body.amount);
-
-    // Fetch dynamic limits from platform_settings
-    const { data: settingRows } = await supabaseAdmin
-      .from('platform_settings')
-      .select('key, value')
-      .in('key', ['min_customer_wallet_topup', 'max_customer_wallet_balance']);
-
-    const settingsMap: Record<string, number> = {};
-    (settingRows || []).forEach((r: any) => {
-      settingsMap[r.key] = Number(r.value);
-    });
-
-    const minTopup = settingsMap['min_customer_wallet_topup'] || 100;
-    const maxBalance = settingsMap['max_customer_wallet_balance'] || 10000;
-
-    if (isNaN(amount) || amount < minTopup) {
-      return NextResponse.json({ error: `Minimum top-up amount is ₹${minTopup}.` }, { status: 400 });
-    }
-
-    // 1. Get or create wallet
-    let { data: wallet } = await supabaseAdmin
-      .from('customer_wallets')
-      .select('*')
-      .eq('customer_id', customerId)
-      .maybeSingle();
-
-    if (!wallet) {
-      const { data: newWallet } = await supabaseAdmin
-        .from('customer_wallets')
-        .insert({ customer_id: customerId, balance: 0.00 })
-        .select('*')
-        .single();
-      wallet = newWallet;
-    }
-
-    if (!wallet) {
-      return NextResponse.json({ error: 'Failed to create wallet' }, { status: 500 });
-    }
-
-    const newBalance = Number(wallet.balance) + amount;
-
-    if (newBalance > maxBalance) {
-      return NextResponse.json({ error: `Wallet balance cannot exceed ₹${maxBalance}.` }, { status: 400 });
-    }
-
-    // Update balance
-    const { error: updateErr } = await supabaseAdmin
-      .from('customer_wallets')
-      .update({ balance: newBalance, updated_at: new Date().toISOString() })
-      .eq('customer_id', customerId);
-
-    if (updateErr) throw updateErr;
-
-    // Log transaction
-    await supabaseAdmin.from('customer_wallet_transactions').insert({
-      customer_id: customerId,
-      amount: amount,
-      type: 'TOP_UP',
-      description: `Topped up ₹${amount} via online payment`
-    });
-
-    return NextResponse.json({ success: true, balance: newBalance });
-  } catch (error: any) {
-    console.error('Error topping up customer wallet:', error.message || error);
-    return NextResponse.json(
-      { error: error.message || 'Internal server error' },
-      { status: error.status || 500 }
-    );
-  }
+  return NextResponse.json(
+    { 
+      error: 'Direct wallet top-up is disabled. Please create a Razorpay order via POST /api/customer/wallet/topup and verify via POST /api/customer/wallet/verify.' 
+    },
+    { status: 400 }
+  );
 }
+

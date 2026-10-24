@@ -1,20 +1,30 @@
 import imageCompression from 'browser-image-compression';
 
 export async function compressKycImage(file: File, documentType: string): Promise<File> {
-  const isDocument = ['AADHAAR_FRONT', 'AADHAAR_BACK', 'PAN_CARD'].includes(documentType);
+  const isDocument = [
+    'AADHAAR_FRONT',
+    'AADHAAR_BACK',
+    'PAN_CARD',
+    'EXPERIENCE_CERTIFICATE',
+    'CERTIFICATE',
+    'WORK_PROOF',
+    'ATTACHMENT'
+  ].includes(documentType);
   
   const options = {
-    maxSizeMB: isDocument ? 0.3 : 0.25, // 300KB for docs, 250KB for photos
+    maxSizeMB: 0.098, // Strictly <= 100KB (~98KB target) for documents and certificates
     maxWidthOrHeight: isDocument ? 1200 : 800, // 1200px width for docs, 800px for photos
     useWebWorker: true,
-    fileType: 'image/webp'
+    fileType: 'image/webp',
+    initialQuality: 0.85
   };
 
   try {
     const compressedBlob = await imageCompression(file, options);
     
     // Create new WebP File object from the compressed blob
-    const fileName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
+    const fileName = (file.name.substring(0, file.name.lastIndexOf('.')) || file.name)
+      .replace(/[^a-zA-Z0-9_-]/g, '_');
     const webpFile = new File(
       [compressedBlob], 
       `${fileName}.webp`, 
@@ -24,7 +34,7 @@ export async function compressKycImage(file: File, documentType: string): Promis
       }
     );
     
-    console.log(`[Compression] Original: ${(file.size / 1024).toFixed(1)}KB, Compressed: ${(webpFile.size / 1024).toFixed(1)}KB`);
+    console.log(`[KYC Doc Compression] Original: ${(file.size / 1024).toFixed(1)}KB, Compressed: ${(webpFile.size / 1024).toFixed(1)}KB (<= 100KB)`);
     return webpFile;
   } catch (err) {
     console.error('Image compression failed:', err);
@@ -62,6 +72,44 @@ export async function compressCategoryImage(file: File): Promise<File> {
     return webpFile;
   } catch (err) {
     console.error('Category image compression failed:', err);
+    throw err;
+  }
+}
+
+/**
+ * Compresses a service item image strictly under 80KB (< 80kb)
+ * with high visual clarity for web catalogs, customer portals, and mobile apps.
+ */
+export async function compressServiceImage(file: File): Promise<File> {
+  // If the file is already under 75KB and is webp, return directly
+  if (file.size <= 75 * 1024 && file.type === 'image/webp') {
+    return file;
+  }
+
+  const options = {
+    maxSizeMB: 0.075, // Strictly under 80KB (75KB max target)
+    maxWidthOrHeight: 1200,
+    useWebWorker: true,
+    fileType: 'image/webp',
+    initialQuality: 0.85
+  };
+
+  try {
+    const compressedBlob = await imageCompression(file, options);
+    const fileName = (file.name.substring(0, file.name.lastIndexOf('.')) || file.name)
+      .replace(/[^a-zA-Z0-9_-]/g, '_');
+    const webpFile = new File(
+      [compressedBlob],
+      `${fileName}.webp`,
+      {
+        type: 'image/webp',
+        lastModified: Date.now()
+      }
+    );
+    console.log(`[Service Image Compression] Original: ${(file.size / 1024).toFixed(1)}KB, Compressed: ${(webpFile.size / 1024).toFixed(1)}KB`);
+    return webpFile;
+  } catch (err) {
+    console.error('Service image compression failed:', err);
     throw err;
   }
 }

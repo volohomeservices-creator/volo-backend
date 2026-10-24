@@ -127,14 +127,14 @@ export async function GET(request: Request) {
     const payload = isDefault
       ? await requestCoalescer.coalesce('customer_services_default_promise', async () => {
           const res = await fetchServices();
-          memoryCache.set('customer_services_default', res, 3600); // 1 hour TTL
+          memoryCache.set('customer_services_default', res, 15); // 15s TTL so admin updates reflect promptly
           return res;
         })
       : await fetchServices();
 
     return NextResponse.json(payload, {
       headers: {
-        'Cache-Control': 's-maxage=3600, stale-while-revalidate=86400',
+        'Cache-Control': 'no-cache, no-store, max-age=0, must-revalidate',
       },
     });
   } catch (error: any) {

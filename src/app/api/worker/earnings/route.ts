@@ -186,72 +186,11 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  try {
-    const session = await requireRole(request, 'worker');
-    const workerId = session.user_id;
-    const { data: body, errorResponse } = await validateBody(request, z.any());
-    if (errorResponse) return errorResponse;
-    const amount = Number(body.amount);
-
-    // Fetch dynamic minimum top-up setting from platform_settings
-    const { data: minTopupSetting } = await supabaseAdmin
-      .from('platform_settings')
-      .select('value')
-      .eq('key', 'min_worker_wallet_topup')
-      .maybeSingle();
-
-    const minTopup = minTopupSetting ? Number(minTopupSetting.value) || 100 : 100;
-    if (isNaN(amount) || amount < minTopup) {
-      return NextResponse.json(
-        { error: `Minimum wallet top-up amount is ₹${minTopup}.` },
-        { status: 400 }
-      );
-    }
-
-    // 1. Get or create wallet
-    let { data: wallet } = await supabaseAdmin
-      .from('worker_wallets')
-      .select('*')
-      .eq('worker_id', workerId)
-      .maybeSingle();
-
-    if (!wallet) {
-      const { data: newWallet } = await supabaseAdmin
-        .from('worker_wallets')
-        .insert({ worker_id: workerId, balance: 0.00, minimum_balance: -500.00 })
-        .select('*')
-        .single();
-      wallet = newWallet;
-    }
-
-    if (!wallet) {
-      return NextResponse.json({ error: 'Failed to create wallet' }, { status: 500 });
-    }
-
-    const newBalance = Number(wallet.balance) + amount;
-
-    // Update balance
-    const { error: updateErr } = await supabaseAdmin
-      .from('worker_wallets')
-      .update({ balance: newBalance, updated_at: new Date().toISOString() })
-      .eq('worker_id', workerId);
-
-    if (updateErr) throw updateErr;
-
-    // Log transaction
-    await supabaseAdmin.from('wallet_transactions').insert({
-      worker_id: workerId,
-      amount: amount,
-      type: 'TOPUP',
-      description: `Topped up commission wallet by ₹${amount}`
-    });
-
-    return NextResponse.json({ success: true, balance: newBalance });
-  } catch (error: any) {
-    console.error('Error topping up worker wallet:', error.message || error);
-    return NextResponse.json(
-      { error: error.message || 'Internal server error' },
-      { status: error.status || 500 }
-    );
-  }
+  return NextResponse.json(
+    { 
+      error: 'Direct commission top-up is disabled. Please create a Razorpay order via POST /api/worker/wallet-topup and verify via POST /api/worker/wallet-topup/verify.' 
+    },
+    { status: 400 }
+  );
 }
+

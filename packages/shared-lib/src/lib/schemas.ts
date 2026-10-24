@@ -37,23 +37,23 @@ export const customerProfileUpdateSchema = z.object({
   email: z.string().email().optional(),
   address: z.string().max(255).optional(),
   avatar_url: z.string().url().or(z.string().length(0)).optional(),
-  city: z.string().max(100).optional(),
-  state: z.string().max(100).optional(),
-  pincode: z.string().max(20).optional()
+  city: z.string().max(100).optional().nullable().default('Bangalore'),
+  state: z.string().max(100).optional().nullable().default('Karnataka'),
+  pincode: z.string().max(20).optional().nullable().default('560001')
 }).strict();
 
 export const customerAddressSchema = z.object({
-  label: z.string().min(1).max(50).optional(),
-  address: z.string().min(5).max(255),
-  city: z.string().min(2).max(100),
-  state: z.string().min(2).max(100),
-  pincode: z.string().min(4).max(20),
-  latitude: z.number().min(-90).max(90).optional(),
-  longitude: z.number().min(-180).max(180).optional(),
+  label: z.string().min(1).max(50).optional().default('HOME'),
+  address: z.string().min(1).max(1000),
+  city: z.string().max(100).optional().nullable().default('Bangalore'),
+  state: z.string().max(100).optional().nullable().default('Karnataka'),
+  pincode: z.string().max(20).optional().nullable().default('560001'),
+  latitude: z.union([z.number(), z.string().transform(v => parseFloat(v))]).optional().nullable(),
+  longitude: z.union([z.number(), z.string().transform(v => parseFloat(v))]).optional().nullable(),
   is_default: z.boolean().optional(),
-  place_id: z.string().optional(),
-  formatted_address: z.string().optional()
-}).strict();
+  place_id: z.string().optional().nullable(),
+  formatted_address: z.string().optional().nullable()
+});
 
 // ---------------------------------------------------------
 // Worker Schemas

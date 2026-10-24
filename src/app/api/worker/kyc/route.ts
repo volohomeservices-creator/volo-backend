@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth';
 import { supabaseAdmin } from '@/lib/supabase-server';
 import { ensureBucketsExist } from '@/lib/storage-setup';
+import { encryptBankAccount } from '@/lib/settlement-engine';
 
 export async function GET(request: Request) {
   const cacheHeaders = { 'Cache-Control': 'no-store, max-age=0, must-revalidate' };
@@ -36,9 +37,11 @@ export async function GET(request: Request) {
           AADHAAR_FRONT: 'aadhaar-front.webp',
           AADHAAR_BACK: 'aadhaar-back.webp',
           PAN_CARD: 'pan.webp',
-          SELFIE_VERIFICATION: 'selfie.webp'
+          SELFIE_VERIFICATION: 'selfie.webp',
+          EXPERIENCE_CERTIFICATE: 'certificate.webp',
+          CERTIFICATE: 'certificate.webp'
         };
-        path = `worker_${workerId}/${fileMap[doc.document_type]}`;
+        path = `worker_${workerId}/${fileMap[doc.document_type] || 'certificate.webp'}`;
       }
 
       const { data } = await supabaseAdmin.storage
@@ -75,6 +78,25 @@ export async function GET(request: Request) {
       .single();
 
     if (workerErr) throw workerErr;
+
+    // Fetch bank account from worker_bank_accounts (settlement source of truth)
+    let { data: primaryBank } = await supabaseAdmin
+      .from('worker_bank_accounts')
+      .select('id, account_holder_name, bank_name, branch, account_type, account_last_four, ifsc_code, upi_id, is_verified, verification_status, is_primary')
+      .eq('worker_id', workerId)
+      .eq('is_primary', true)
+      .maybeSingle();
+
+    if (!primaryBank) {
+      const { data: fallbackBank } = await supabaseAdmin
+        .from('worker_bank_accounts')
+        .select('id, account_holder_name, bank_name, branch, account_type, account_last_four, ifsc_code, upi_id, is_verified, verification_status, is_primary')
+        .eq('worker_id', workerId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      primaryBank = fallbackBank;
+    }
 
     // Fetch skills from worker_profiles
     const { data: profile } = await supabaseAdmin
@@ -114,10 +136,24 @@ export async function GET(request: Request) {
       },
       skills: profile?.skills || [],
       categories: categories || [],
-      bankDetails: workerData ? {
-        ...workerData,
-        full_name: userDetails?.full_name || ''
-      } : null
+      bankDetails: {
+        full_name: userDetails?.full_name || '',
+        dob: workerData?.dob || '',
+        worker_id_code: workerData?.worker_id_code || '',
+        bank_account_name: primaryBank?.account_holder_name || workerData?.bank_account_name || '',
+        account_holder_name: primaryBank?.account_holder_name || workerData?.bank_account_name || '',
+        bank_name: primaryBank?.bank_name || '',
+        branch: primaryBank?.branch || '',
+        account_type: primaryBank?.account_type || 'Savings',
+        bank_account_number: workerData?.bank_account_number || '',
+        account_last_four: primaryBank?.account_last_four || (workerData?.bank_account_number ? workerData.bank_account_number.slice(-4) : ''),
+        masked_account_number: primaryBank ? `•••• ${primaryBank.account_last_four}` : (workerData?.bank_account_number ? `•••• ${workerData.bank_account_number.slice(-4)}` : ''),
+        bank_ifsc: primaryBank?.ifsc_code || workerData?.bank_ifsc || '',
+        ifsc_code: primaryBank?.ifsc_code || workerData?.bank_ifsc || '',
+        upi_id: primaryBank?.upi_id || '',
+        verification_status: primaryBank?.verification_status || 'PENDING',
+        is_verified: primaryBank?.is_verified ?? false
+      }
     }, { headers: cacheHeaders });
   } catch (error: any) {
     console.error('Error fetching KYC documents:', error.message || error);
@@ -156,12 +192,117 @@ export async function POST(request: Request) {
 
     // 1. Handle Bank & Personal Details Upload if sent
     if (bankDetails) {
-      const { bank_account_name, bank_account_number, bank_ifsc, full_name, dob, skills } = bankDetails;
+      const { 
+        bank_account_name, 
+        account_holder_name,
+        bank_account_number, 
+        confirm_account_number,
+        bank_ifsc, 
+        ifsc_code,
+        bank_name,
+        branch,
+        account_type,
+        upi_id,
+        full_name, 
+        dob, 
+        skills 
+      } = bankDetails;
+
+      const rawHolder = (account_holder_name || bank_account_name || full_name || '').toString().trim().replace(/\s+/g, ' ');
+      const cleanAccountNo = (bank_account_number || '').toString().trim();
+      const cleanIfsc = (ifsc_code || bank_ifsc || '').toString().trim().toUpperCase();
+
+      // If bank account is supplied, enforce strict validation and save to worker_bank_accounts
+      if (cleanAccountNo || cleanIfsc) {
+        if (!cleanAccountNo || !/^\d{9,18}$/.test(cleanAccountNo)) {
+          return NextResponse.json({ 
+            error: 'Invalid Bank Account Number. Must be between 9 and 18 digits (numbers only).' 
+          }, { status: 400 });
+        }
+
+        if (confirm_account_number && cleanAccountNo !== confirm_account_number.toString().trim()) {
+          return NextResponse.json({ 
+            error: 'Bank account numbers do not match.' 
+          }, { status: 400 });
+        }
+
+        if (!cleanIfsc || !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(cleanIfsc)) {
+          return NextResponse.json({ 
+            error: 'Invalid IFSC format. Expected 11 characters starting with 4 letters followed by 0 (e.g. HDFC0001234).' 
+          }, { status: 400 });
+        }
+
+        if (rawHolder && (!/^[a-zA-Z\s.\-']+$/.test(rawHolder) || !/[a-zA-Z]/.test(rawHolder))) {
+          return NextResponse.json({ 
+            error: 'Account Holder Name contains invalid characters. Numbers, emojis, and symbols are not allowed.' 
+          }, { status: 400 });
+        }
+
+        // Resolve Bank Name & Branch if not provided
+        let resolvedBankName = (bank_name || '').toString().trim();
+        let resolvedBranch = (branch || '').toString().trim();
+        if (!resolvedBankName) {
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 4000);
+            const ifscRes = await fetch(`https://ifsc.razorpay.com/${cleanIfsc}`, { signal: controller.signal });
+            clearTimeout(timeoutId);
+            if (ifscRes.ok) {
+              const ifscData = await ifscRes.json();
+              resolvedBankName = ifscData.BANK || 'Bank';
+              resolvedBranch = ifscData.BRANCH || 'Branch';
+            }
+          } catch (ifscErr) {
+            if (!resolvedBankName) resolvedBankName = 'Bank';
+          }
+        }
+
+        const cleanAccountType = ['Savings', 'Current'].includes(account_type) ? account_type : 'Savings';
+        const rawUpi = (upi_id || '').toString().trim();
+        const isUpiValid = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(rawUpi);
+
+        // Encrypt account number
+        const encrypted = encryptBankAccount(cleanAccountNo);
+        const lastFour = cleanAccountNo.slice(-4);
+
+        // De-prioritize older bank records for this worker
+        await supabaseAdmin
+          .from('worker_bank_accounts')
+          .update({ is_primary: false, updated_at: new Date().toISOString() })
+          .eq('worker_id', workerId);
+
+        // Insert into worker_bank_accounts (settlement source of truth)
+        const bankInsertPayload: any = {
+          worker_id: workerId,
+          account_holder_name: rawHolder || 'Partner',
+          bank_name: resolvedBankName || 'Bank',
+          branch: isUpiValid ? `UPI:${rawUpi}` : (resolvedBranch || 'Branch'),
+          account_type: cleanAccountType,
+          account_number_encrypted: encrypted,
+          account_last_four: lastFour,
+          ifsc_code: cleanIfsc,
+          is_verified: false,
+          verification_status: 'PENDING',
+          is_primary: true,
+          updated_at: new Date().toISOString()
+        };
+        if (isUpiValid) {
+          bankInsertPayload.upi_id = rawUpi;
+        }
+
+        const { error: bankAccErr } = await supabaseAdmin
+          .from('worker_bank_accounts')
+          .insert(bankInsertPayload);
+
+        if (bankAccErr) {
+          console.error('[KYC Bank Account Insert Error]:', bankAccErr.message);
+        }
+      }
 
       const updateData: any = {
-        bank_account_name,
-        bank_account_number,
-        bank_ifsc
+        bank_account_name: rawHolder || bank_account_name,
+        bank_account_number: cleanAccountNo || bank_account_number,
+        bank_ifsc: cleanIfsc || bank_ifsc
       };
       if (dob) {
         updateData.dob = dob;
@@ -295,7 +436,23 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing document parameters' }, { status: 400 });
     }
 
-    const validTypes = ['AADHAAR_FRONT', 'AADHAAR_BACK', 'PAN_CARD', 'PROFILE_PHOTO', 'SELFIE_VERIFICATION'];
+    const validTypes = [
+      'AADHAAR_FRONT',
+      'AADHAAR_BACK',
+      'PAN_CARD',
+      'PROFILE_PHOTO',
+      'SELFIE_VERIFICATION',
+      'EXPERIENCE_CERTIFICATE',
+      'CERTIFICATE'
+    ];
+    const requiredTypes = [
+      'AADHAAR_FRONT',
+      'AADHAAR_BACK',
+      'PAN_CARD',
+      'PROFILE_PHOTO',
+      'SELFIE_VERIFICATION',
+      'EXPERIENCE_CERTIFICATE'
+    ];
     if (!validTypes.includes(document_type)) {
       return NextResponse.json({ error: 'Invalid document type' }, { status: 400 });
     }
@@ -323,6 +480,9 @@ export async function POST(request: Request) {
     if (document_type === 'AADHAAR_BACK') syncData.aadhar_back_url = file_url;
     if (document_type === 'PAN_CARD') syncData.pan_url = file_url;
     if (document_type === 'SELFIE_VERIFICATION') syncData.selfie_url = file_url;
+    if (document_type === 'EXPERIENCE_CERTIFICATE' || document_type === 'CERTIFICATE') {
+      syncData.certificate_url = file_url;
+    }
 
     if (Object.keys(syncData).length > 0) {
       const { error: syncErr } = await supabaseAdmin
@@ -344,6 +504,9 @@ export async function POST(request: Request) {
     if (document_type === 'SELFIE_VERIFICATION') {
       kycStatusUpdate.selfie_status = 'PENDING';
     }
+    if (document_type === 'EXPERIENCE_CERTIFICATE' || document_type === 'CERTIFICATE') {
+      kycStatusUpdate.certificate_status = 'PENDING';
+    }
 
     // Get all uploaded document types for this worker
     const { data: currentDocs } = await supabaseAdmin
@@ -353,8 +516,18 @@ export async function POST(request: Request) {
 
     const uploadedTypes = currentDocs?.map(d => d.document_type) || [];
     
-    // Check if all 5 requirements are met
-    const hasAllDocs = validTypes.every(type => uploadedTypes.includes(type) || type === document_type);
+    // Check if all requirements including experience/certificate are met
+    const hasAllDocs = requiredTypes.every(type => {
+      if (type === 'EXPERIENCE_CERTIFICATE') {
+        return (
+          uploadedTypes.includes('EXPERIENCE_CERTIFICATE') ||
+          uploadedTypes.includes('CERTIFICATE') ||
+          document_type === 'EXPERIENCE_CERTIFICATE' ||
+          document_type === 'CERTIFICATE'
+        );
+      }
+      return uploadedTypes.includes(type) || type === document_type;
+    });
 
     if (hasAllDocs) {
       kycStatusUpdate.overall_status = 'PENDING';
