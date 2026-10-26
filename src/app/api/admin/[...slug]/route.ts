@@ -1925,8 +1925,9 @@ export async function POST(
       if (error) throw error;
 
       if (action === 'APPROVE') {
-        const { createWallet } = await import('@/lib/wallet-engine');
+        const { createWallet, creditWorkerKycWelcomeBonus } = await import('@/lib/wallet-engine');
         await createWallet(workerId);
+        await creditWorkerKycWelcomeBonus(workerId);
       }
 
       // Update overall kyc checklist and remarks in worker_kyc table
@@ -2027,8 +2028,9 @@ export async function POST(
 
       if (updateErr) throw updateErr;
 
-      const { createWallet } = await import('@/lib/wallet-engine');
+      const { createWallet, creditWorkerKycWelcomeBonus } = await import('@/lib/wallet-engine');
       await createWallet(workerId);
+      await creditWorkerKycWelcomeBonus(workerId);
 
       await logAuditAction({
         admin_id: session.user_id,

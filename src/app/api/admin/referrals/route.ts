@@ -21,6 +21,8 @@ export async function GET(request: Request) {
         id,
         status,
         reward_amount,
+        referee_reward_amount,
+        referee_rewarded_at,
         role,
         created_at,
         rewarded_at,
@@ -56,7 +58,7 @@ export async function PATCH(request: Request) {
     // Get the referral row
     const { data: referral, error: fetchErr } = await supabaseAdmin
       .from('referrals')
-      .select('id, referrer_id, reward_amount, status, role')
+      .select('id, referrer_id, referred_user_id, reward_amount, referee_reward_amount, referee_rewarded_at, status, role')
       .eq('id', referral_id)
       .single();
 
@@ -145,6 +147,30 @@ export async function PATCH(request: Request) {
         } catch (workerWalletErr) {
           console.error('[Admin Referrals] Worker wallet/txn credit failed:', workerWalletErr);
         }
+      }
+    }
+
+    // Also ensure referee welcome bonus is credited if pending
+    if (!referral.referee_rewarded_at && referral.referred_user_id) {
+      try {
+        if (referral.role === 'worker') {
+          // Check if worker KYC is approved before crediting welcome bonus
+          const { data: worker } = await supabaseAdmin
+            .from('workers')
+            .select('kyc_status')
+            .eq('id', referral.referred_user_id)
+            .maybeSingle();
+
+          if (worker?.kyc_status === 'APPROVED') {
+            const { creditWorkerKycWelcomeBonus } = await import('@/lib/wallet-engine');
+            await creditWorkerKycWelcomeBonus(referral.referred_user_id);
+          }
+        } else if (referral.role === 'customer') {
+          const { creditCustomerReferralWelcomeBonus } = await import('@/lib/wallet-engine');
+          await creditCustomerReferralWelcomeBonus(referral.referred_user_id);
+        }
+      } catch (refereeCreditErr) {
+        console.error('[Admin Referrals] Referee welcome credit failed (non-fatal):', refereeCreditErr);
       }
     }
 

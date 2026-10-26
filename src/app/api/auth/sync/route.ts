@@ -153,10 +153,13 @@ export async function POST(request: Request) {
             // Get the reward amount for this role
             const { data: settings } = await supabaseAdmin
               .from('referral_settings')
-              .select('referrer_reward')
+              .select('referrer_reward, referee_reward')
               .eq('role', refCodeRow.role)
               .eq('active', true)
               .maybeSingle();
+
+            const referrerReward = Number(settings?.referrer_reward ?? (refCodeRow.role === 'customer' ? 100 : 100));
+            const refereeReward = Number(settings?.referee_reward ?? (refCodeRow.role === 'customer' ? 50 : 100));
 
             await supabaseAdmin
               .from('referrals')
@@ -166,8 +169,15 @@ export async function POST(request: Request) {
                 referral_code: ref_code.trim().toUpperCase(),
                 role: refCodeRow.role,
                 status: 'PENDING',
-                reward_amount: settings?.referrer_reward || 500,
+                reward_amount: referrerReward,
+                referee_reward_amount: refereeReward,
               });
+
+            // If customer signup, credit welcome bonus immediately
+            if (refCodeRow.role === 'customer' && refereeReward > 0) {
+              const { creditCustomerReferralWelcomeBonus } = await import('@/lib/wallet-engine');
+              await creditCustomerReferralWelcomeBonus(user_id);
+            }
           }
         } catch (refErr) {
           // Non-fatal: log but don't block signup
