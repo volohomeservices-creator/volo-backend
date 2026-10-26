@@ -6,9 +6,9 @@ VALUES (
   'admin',
   'Super Admin',
   '+910000000000',
-  'admin@volo.com',
+  'admin@voloapp.in',
   true,
-  '$2b$10$jUR5AKg/D8PnvVsh.aevCeIAaEtoN2HBc6sg6kl9XbEQZxoLi2DnS' -- Bcrypt hash for: admin123
+  '$2b$10$I/j0HgPQ4c31YhEasBHRYenPGC80J8bXs1tW/j0O0Jmjk4YHMDlhy' -- Bcrypt hash for: Admin@123#@
 )
 ON CONFLICT (email) DO UPDATE
 SET password_hash = EXCLUDED.password_hash,
