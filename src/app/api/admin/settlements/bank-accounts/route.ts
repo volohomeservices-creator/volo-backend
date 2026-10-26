@@ -19,12 +19,24 @@ export async function GET(request: Request) {
     const { data, error } = await supabaseAdmin
       .from('worker_bank_accounts')
       .select('*, workers(users(full_name, phone))')
+      .order('is_verified', { ascending: false })
+      .order('is_primary', { ascending: false })
       .order('created_at', { ascending: false });
 
     if (error) throw error;
 
+    // Deduplicate by worker_id so each partner appears exactly once
+    const seenWorkerIds = new Set<string>();
+    const uniqueAccounts: any[] = [];
+    for (const account of data || []) {
+      if (!seenWorkerIds.has(account.worker_id)) {
+        seenWorkerIds.add(account.worker_id);
+        uniqueAccounts.push(account);
+      }
+    }
+
     // Decrypt the account numbers before sending to admin for verification
-    const decryptedData = data.map(account => {
+    const decryptedData = uniqueAccounts.map(account => {
       let decryptedAccount = '';
       try {
         decryptedAccount = decryptData(account.account_number_encrypted);
@@ -75,11 +87,11 @@ export async function POST(request: Request) {
 
     if (updateErr || !account) throw updateErr;
 
-    // Single Primary Rule: If this account is verified as primary, set all other accounts of this worker to non-primary
+    // Single Account Rule: Ensure no duplicate or legacy records exist for this worker
     if (isVerified) {
       await supabaseAdmin
         .from('worker_bank_accounts')
-        .update({ is_primary: false })
+        .delete()
         .eq('worker_id', account.worker_id)
         .neq('id', accountId);
     }

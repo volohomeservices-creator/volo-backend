@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth';
 import { supabaseAdmin } from '@/lib/supabase-server';
 import { ensureBucketsExist } from '@/lib/storage-setup';
-import { encryptBankAccount } from '@/lib/settlement-engine';
+import { encryptBankAccount, decryptBankAccount } from '@/lib/settlement-engine';
 
 export async function GET(request: Request) {
   const cacheHeaders = { 'Cache-Control': 'no-store, max-age=0, must-revalidate' };
@@ -269,37 +269,85 @@ export async function POST(request: Request) {
         const encrypted = encryptBankAccount(cleanAccountNo);
         const lastFour = cleanAccountNo.slice(-4);
 
-        // De-prioritize older bank records for this worker
-        await supabaseAdmin
+        // Single Account Enforcement: Check if worker already has a bank account record
+        const { data: existingAccount } = await supabaseAdmin
           .from('worker_bank_accounts')
-          .update({ is_primary: false, updated_at: new Date().toISOString() })
-          .eq('worker_id', workerId);
+          .select('id, ifsc_code, account_last_four, account_number_encrypted, is_verified, verification_status')
+          .eq('worker_id', workerId)
+          .maybeSingle();
 
-        // Insert into worker_bank_accounts (settlement source of truth)
-        const bankInsertPayload: any = {
-          worker_id: workerId,
-          account_holder_name: rawHolder || 'Partner',
-          bank_name: resolvedBankName || 'Bank',
-          branch: isUpiValid ? `UPI:${rawUpi}` : (resolvedBranch || 'Branch'),
-          account_type: cleanAccountType,
-          account_number_encrypted: encrypted,
-          account_last_four: lastFour,
-          ifsc_code: cleanIfsc,
-          is_verified: false,
-          verification_status: 'PENDING',
-          is_primary: true,
-          updated_at: new Date().toISOString()
-        };
-        if (isUpiValid) {
-          bankInsertPayload.upi_id = rawUpi;
-        }
+        if (existingAccount) {
+          // Check if the account details are identical
+          let isSameAccount = false;
+          try {
+            const existingDecrypted = decryptBankAccount(existingAccount.account_number_encrypted);
+            if (existingDecrypted === cleanAccountNo && existingAccount.ifsc_code === cleanIfsc) {
+              isSameAccount = true;
+            }
+          } catch (e) {
+            if (existingAccount.account_last_four === lastFour && existingAccount.ifsc_code === cleanIfsc) {
+              isSameAccount = true;
+            }
+          }
 
-        const { error: bankAccErr } = await supabaseAdmin
-          .from('worker_bank_accounts')
-          .insert(bankInsertPayload);
+          const updatePayload: any = {
+            account_holder_name: rawHolder || 'Partner',
+            bank_name: resolvedBankName || 'Bank',
+            branch: isUpiValid ? `UPI:${rawUpi}` : (resolvedBranch || 'Branch'),
+            account_type: cleanAccountType,
+            is_primary: true,
+            updated_at: new Date().toISOString()
+          };
+          if (isUpiValid) {
+            updatePayload.upi_id = rawUpi;
+          }
 
-        if (bankAccErr) {
-          console.error('[KYC Bank Account Insert Error]:', bankAccErr.message);
+          if (!isSameAccount) {
+            // Details changed: update encrypted number and reset verification to PENDING
+            updatePayload.account_number_encrypted = encrypted;
+            updatePayload.account_last_four = lastFour;
+            updatePayload.ifsc_code = cleanIfsc;
+            updatePayload.is_verified = false;
+            updatePayload.verification_status = 'PENDING';
+            updatePayload.beneficiary_id = null;
+            updatePayload.provider_fund_account_id = null;
+          }
+
+          const { error: bankUpdateErr } = await supabaseAdmin
+            .from('worker_bank_accounts')
+            .update(updatePayload)
+            .eq('id', existingAccount.id);
+
+          if (bankUpdateErr) {
+            console.error('[KYC Bank Account Update Error]:', bankUpdateErr.message);
+          }
+        } else {
+          // No record exists: insert a single record
+          const bankInsertPayload: any = {
+            worker_id: workerId,
+            account_holder_name: rawHolder || 'Partner',
+            bank_name: resolvedBankName || 'Bank',
+            branch: isUpiValid ? `UPI:${rawUpi}` : (resolvedBranch || 'Branch'),
+            account_type: cleanAccountType,
+            account_number_encrypted: encrypted,
+            account_last_four: lastFour,
+            ifsc_code: cleanIfsc,
+            is_verified: false,
+            verification_status: 'PENDING',
+            is_primary: true,
+            updated_at: new Date().toISOString()
+          };
+          if (isUpiValid) {
+            bankInsertPayload.upi_id = rawUpi;
+          }
+
+          const { error: bankAccErr } = await supabaseAdmin
+            .from('worker_bank_accounts')
+            .insert(bankInsertPayload);
+
+          if (bankAccErr) {
+            console.error('[KYC Bank Account Insert Error]:', bankAccErr.message);
+          }
         }
       }
 

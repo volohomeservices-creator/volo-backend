@@ -893,10 +893,23 @@ export async function GET(
         const { data, error } = await supabaseAdmin
           .from('worker_bank_accounts')
           .select('*, workers(users(full_name, phone))')
+          .order('is_verified', { ascending: false })
+          .order('is_primary', { ascending: false })
           .order('created_at', { ascending: false });
         if (error) throw error;
+
+        // Deduplicate by worker_id so each partner appears once
+        const seenWorkerIds = new Set<string>();
+        const uniqueAccounts: any[] = [];
+        for (const account of data || []) {
+          if (!seenWorkerIds.has(account.worker_id)) {
+            seenWorkerIds.add(account.worker_id);
+            uniqueAccounts.push(account);
+          }
+        }
+
         const { decryptData } = await import('@/lib/crypto');
-        const decryptedData = (data || []).map((account: any) => {
+        const decryptedData = uniqueAccounts.map((account: any) => {
           let decryptedAccount = '';
           try {
             decryptedAccount = decryptData(account.account_number_encrypted);
@@ -1533,7 +1546,7 @@ export async function POST(
         if (isVerified) {
           await supabaseAdmin
             .from('worker_bank_accounts')
-            .update({ is_primary: false })
+            .delete()
             .eq('worker_id', account.worker_id)
             .neq('id', accountId);
 

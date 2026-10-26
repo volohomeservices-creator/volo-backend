@@ -6,7 +6,7 @@ import { supabaseAdmin } from '@/lib/supabase-server';
 import { logAuditAction } from '@/lib/audit';
 import { AuditAction } from '@/types';
 import { dispatchNotification } from '@/lib/notification-dispatcher';
-import { encryptBankAccount } from '@/lib/settlement-engine';
+import { encryptBankAccount, decryptBankAccount } from '@/lib/settlement-engine';
 
 export async function GET(request: Request) {
   try {
@@ -153,44 +153,95 @@ export async function POST(request: Request) {
     const lastFour = cleanAccountNo.slice(-4);
 
     // 7. EDIT / SINGLE PRIMARY ACCOUNT ENFORCEMENT
-    // Ensure existing primary accounts for this worker are set to is_primary = false
-    await supabaseAdmin
+    const { data: existingAccount } = await supabaseAdmin
       .from('worker_bank_accounts')
-      .update({ is_primary: false, updated_at: new Date().toISOString() })
-      .eq('worker_id', session.user_id);
+      .select('id, ifsc_code, account_last_four, account_number_encrypted, is_verified, verification_status')
+      .eq('worker_id', session.user_id)
+      .maybeSingle();
 
     // Optional UPI VPA
     const rawUpi = (body.upi_id || '').toString().trim();
     const isUpiValid = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(rawUpi);
 
-    const insertPayload: any = {
-      worker_id: session.user_id,
-      account_holder_name: rawHolder,
-      bank_name: resolvedBankName,
-      branch: isUpiValid ? `UPI:${rawUpi}` : resolvedBranch,
-      account_type: cleanAccountType,
-      account_number_encrypted: encrypted,
-      account_last_four: lastFour,
-      ifsc_code: cleanIfsc,
-      is_verified: false,
-      verification_status: 'PENDING',
-      is_primary: true,
-      updated_at: new Date().toISOString()
-    };
-    if (isUpiValid) {
-      insertPayload.upi_id = rawUpi;
-    }
+    let newAccount: any = null;
 
-    // Insert new account record with is_primary = true and status PENDING
-    const { data: newAccount, error: insertError } = await supabaseAdmin
-      .from('worker_bank_accounts')
-      .insert(insertPayload)
-      .select('id, worker_id, account_holder_name, bank_name, branch, account_type, account_last_four, ifsc_code, is_verified, verification_status, is_primary, created_at')
-      .single();
+    if (existingAccount) {
+      let isSameAccount = false;
+      try {
+        const existingDecrypted = decryptBankAccount(existingAccount.account_number_encrypted);
+        if (existingDecrypted === cleanAccountNo && existingAccount.ifsc_code === cleanIfsc) {
+          isSameAccount = true;
+        }
+      } catch (e) {
+        if (existingAccount.account_last_four === lastFour && existingAccount.ifsc_code === cleanIfsc) {
+          isSameAccount = true;
+        }
+      }
 
-    if (insertError) {
-      console.error('[Bank Account Save Error]:', insertError.message);
-      return NextResponse.json({ error: 'Failed to record bank account. Please check your details.' }, { status: 500 });
+      const updatePayload: any = {
+        account_holder_name: rawHolder,
+        bank_name: resolvedBankName,
+        branch: isUpiValid ? `UPI:${rawUpi}` : resolvedBranch,
+        account_type: cleanAccountType,
+        is_primary: true,
+        updated_at: new Date().toISOString()
+      };
+      if (isUpiValid) {
+        updatePayload.upi_id = rawUpi;
+      }
+
+      if (!isSameAccount) {
+        updatePayload.account_number_encrypted = encrypted;
+        updatePayload.account_last_four = lastFour;
+        updatePayload.ifsc_code = cleanIfsc;
+        updatePayload.is_verified = false;
+        updatePayload.verification_status = 'PENDING';
+        updatePayload.beneficiary_id = null;
+        updatePayload.provider_fund_account_id = null;
+      }
+
+      const { data: updated, error: updateError } = await supabaseAdmin
+        .from('worker_bank_accounts')
+        .update(updatePayload)
+        .eq('id', existingAccount.id)
+        .select('id, worker_id, account_holder_name, bank_name, branch, account_type, account_last_four, ifsc_code, is_verified, verification_status, is_primary, created_at')
+        .single();
+
+      if (updateError) {
+        console.error('[Bank Account Update Error]:', updateError.message);
+        return NextResponse.json({ error: 'Failed to update bank account.' }, { status: 500 });
+      }
+      newAccount = updated;
+    } else {
+      const insertPayload: any = {
+        worker_id: session.user_id,
+        account_holder_name: rawHolder,
+        bank_name: resolvedBankName,
+        branch: isUpiValid ? `UPI:${rawUpi}` : resolvedBranch,
+        account_type: cleanAccountType,
+        account_number_encrypted: encrypted,
+        account_last_four: lastFour,
+        ifsc_code: cleanIfsc,
+        is_verified: false,
+        verification_status: 'PENDING',
+        is_primary: true,
+        updated_at: new Date().toISOString()
+      };
+      if (isUpiValid) {
+        insertPayload.upi_id = rawUpi;
+      }
+
+      const { data: inserted, error: insertError } = await supabaseAdmin
+        .from('worker_bank_accounts')
+        .insert(insertPayload)
+        .select('id, worker_id, account_holder_name, bank_name, branch, account_type, account_last_four, ifsc_code, is_verified, verification_status, is_primary, created_at')
+        .single();
+
+      if (insertError) {
+        console.error('[Bank Account Save Error]:', insertError.message);
+        return NextResponse.json({ error: 'Failed to record bank account. Please check your details.' }, { status: 500 });
+      }
+      newAccount = inserted;
     }
 
     // Sync with workers table so KYC page and admin worker view stay 100% updated
