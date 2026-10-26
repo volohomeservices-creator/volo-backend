@@ -26,7 +26,7 @@ export async function GET(request: Request) {
     const session = await requireRole(request, 'admin');
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    // 1. Fetch all manual/direct payouts
+    // 1. Fetch referral payouts ONLY (do NOT return job settlements here)
     const { data: payouts, error: pErr } = await supabaseAdmin
       .from('payouts')
       .select(`
@@ -54,14 +54,39 @@ export async function GET(request: Request) {
           )
         )
       `)
+      .in('payout_type', ['REFERRAL_BONUS', 'SIGNUP_BONUS'])
       .order('created_at', { ascending: false })
       .limit(100);
 
     if (pErr) {
-      console.error('[Direct Payout API] Error querying payouts:', pErr);
+      console.error('[Direct Payout API] Error querying referral payouts:', pErr);
     }
 
-    // 2. Fetch all registered bank accounts with worker and user details
+    // 2. Fetch all referrals to compute pending referral rewards awaiting disbursal
+    const { data: referrals, error: rErr } = await supabaseAdmin
+      .from('referrals')
+      .select(`
+        id,
+        referrer_id,
+        referred_user_id,
+        referral_code,
+        status,
+        reward_amount,
+        referee_reward_amount,
+        created_at,
+        role,
+        rewarded_at,
+        referee_rewarded_at,
+        referrer:users!referrals_referrer_id_fkey(id, full_name, phone),
+        referred:users!referrals_referred_user_id_fkey(id, full_name, phone)
+      `)
+      .order('created_at', { ascending: false });
+
+    if (rErr) {
+      console.error('[Direct Payout API] Error querying referrals:', rErr);
+    }
+
+    // 3. Fetch all registered bank accounts with worker and user details
     const { data: bankAccounts, error: bErr } = await supabaseAdmin
       .from('worker_bank_accounts')
       .select(`
@@ -89,7 +114,7 @@ export async function GET(request: Request) {
       console.error('[Direct Payout API] Error querying bank accounts:', bErr);
     }
 
-    // 3. Fetch wallets to pair with bank accounts
+    // 4. Fetch wallets to pair with bank accounts
     const { data: wallets } = await supabaseAdmin
       .from('worker_wallets')
       .select('worker_id, balance');
@@ -124,7 +149,91 @@ export async function GET(request: Request) {
       }
     });
 
-    const formattedPayouts = (payouts || []).map((p: any) => {
+    const referralPayoutsList = payouts || [];
+
+    // 5. Compute pending referral payouts awaiting execution
+    const pendingReferrals: any[] = [];
+    (referrals || []).forEach((ref: any) => {
+      // A. Referrer Reward (Invite Bonus)
+      const refReward = Number(ref.reward_amount || 0);
+      if (refReward > 0 && ref.referrer_id) {
+        const paidToReferrer = referralPayoutsList
+          .filter((p: any) => p.worker_id === ref.referrer_id && ['PAID', 'PROCESSING'].includes(p.status))
+          .reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
+
+        const pending = Math.max(0, refReward - paidToReferrer);
+        const bank = (bankAccounts || []).find((b: any) => b.worker_id === ref.referrer_id);
+        const walletBal = walletMap.get(ref.referrer_id) ?? 0;
+
+        if (pending > 0) {
+          pendingReferrals.push({
+            id: `ref_referrer_${ref.id}`,
+            referralId: ref.id,
+            workerId: ref.referrer_id,
+            captainName: ref.referrer?.full_name || 'Referrer Captain',
+            phone: ref.referrer?.phone || 'N/A',
+            role: 'REFERRER',
+            typeLabel: 'Referral Invite Bonus',
+            referralCode: ref.referral_code,
+            counterpartName: ref.referred?.full_name || 'Invited Captain',
+            counterpartPhone: ref.referred?.phone || '',
+            totalReward: refReward,
+            disbursedAmount: paidToReferrer,
+            pendingAmount: pending,
+            walletBalance: walletBal,
+            bankName: bank?.bank_name || null,
+            accountLastFour: bank?.account_last_four || null,
+            ifscCode: bank?.ifsc_code || null,
+            upiId: bank?.upi_id || null,
+            isBankVerified: bank?.is_verified ?? false,
+            hasBank: !!bank,
+            createdAt: ref.created_at,
+            rewardedAt: ref.rewarded_at
+          });
+        }
+      }
+
+      // B. Referee Reward (Sign-up Welcome Bonus)
+      const refereeReward = Number(ref.referee_reward_amount || 0);
+      if (refereeReward > 0 && ref.referred_user_id) {
+        const paidToReferee = referralPayoutsList
+          .filter((p: any) => p.worker_id === ref.referred_user_id && ['PAID', 'PROCESSING'].includes(p.status))
+          .reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
+
+        const pending = Math.max(0, refereeReward - paidToReferee);
+        const bank = (bankAccounts || []).find((b: any) => b.worker_id === ref.referred_user_id);
+        const walletBal = walletMap.get(ref.referred_user_id) ?? 0;
+
+        if (pending > 0) {
+          pendingReferrals.push({
+            id: `ref_referee_${ref.id}`,
+            referralId: ref.id,
+            workerId: ref.referred_user_id,
+            captainName: ref.referred?.full_name || 'New Captain',
+            phone: ref.referred?.phone || 'N/A',
+            role: 'REFEREE',
+            typeLabel: 'Sign-up Welcome Bonus',
+            referralCode: ref.referral_code,
+            counterpartName: ref.referrer?.full_name || 'Inviting Captain',
+            counterpartPhone: ref.referrer?.phone || '',
+            totalReward: refereeReward,
+            disbursedAmount: paidToReferee,
+            pendingAmount: pending,
+            walletBalance: walletBal,
+            bankName: bank?.bank_name || null,
+            accountLastFour: bank?.account_last_four || null,
+            ifscCode: bank?.ifsc_code || null,
+            upiId: bank?.upi_id || null,
+            isBankVerified: bank?.is_verified ?? false,
+            hasBank: !!bank,
+            createdAt: ref.created_at,
+            rewardedAt: ref.referee_rewarded_at || ref.rewarded_at
+          });
+        }
+      }
+    });
+
+    const formattedPayouts = referralPayoutsList.map((p: any) => {
       const bank = (bankAccounts || []).find((b: any) => b.worker_id === p.worker_id);
       return {
         id: p.id,
@@ -138,7 +247,7 @@ export async function GET(request: Request) {
         providerStatus: p.provider_status,
         utrNumber: p.utr_number,
         payoutMode: p.payout_mode,
-        payoutType: p.payout_type || (p.settlement_batch_id ? 'JOB_SETTLEMENT' : 'DIRECT_BONUS'),
+        payoutType: p.payout_type || 'REFERRAL_BONUS',
         remarks: p.remarks,
         failureReason: p.failure_reason,
         bankName: bank?.bank_name || 'Bank',
@@ -150,6 +259,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       success: true,
+      pendingReferrals,
       payouts: formattedPayouts,
       captains: Array.from(captainsMap.values())
     });
