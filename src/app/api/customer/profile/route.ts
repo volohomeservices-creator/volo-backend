@@ -5,13 +5,12 @@ import { validateBody } from '@/lib/zod-validator';
 import { customerProfileUpdateSchema } from '@/lib/schemas';
 
 function getCompletionPercentage(user: any, defaultAddr: any) {
-  let completedFields = 2; // user ID and phone are guaranteed
-  const totalFields = 8;
+  let completedFields = 1; // phone is guaranteed
+  const totalFields = 4;
 
   if (user?.full_name) completedFields++;
   if (user?.email) completedFields++;
-  if (user?.avatar_url) completedFields++;
-  if (defaultAddr?.address) completedFields += 3; // counts address, city, state
+  if (defaultAddr?.address) completedFields++;
 
   return Math.min(100, Math.round((completedFields / totalFields) * 100));
 }

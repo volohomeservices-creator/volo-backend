@@ -1653,7 +1653,7 @@ export async function POST(
 
     // A.2 services/categories
     if (slug[0] === 'services' && slug[1] === 'categories' && slug.length === 2) {
-      const { data: { name, icon_url, sort_order }, errorResponse } = await validateBody(request, z.any());
+      const { data: { name, icon_url, sort_order, skills }, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
 
       if (!name) {
@@ -1666,7 +1666,8 @@ export async function POST(
           name,
           icon_url: icon_url || null,
           sort_order: sort_order || 0,
-          is_active: true
+          is_active: true,
+          skills: Array.isArray(skills) ? skills : []
         })
         .select('*')
         .single();
@@ -1724,7 +1725,7 @@ export async function POST(
     // A. services
 
     if (slug[0] === 'services' && slug.length === 1) {
-      const { data: { category_id, name, description, base_price, estimated_mins, icon_url }, errorResponse } = await validateBody(request, z.any());
+      const { data: { category_id, name, description, base_price, estimated_mins, icon_url, skill_tag }, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
 
       if (!category_id || !name || !base_price) {
@@ -1740,6 +1741,7 @@ export async function POST(
           base_price,
           estimated_mins: estimated_mins || 60,
           icon_url: icon_url || null,
+          skill_tag: skill_tag || null,
           is_active: true
         })
         .select('*')

@@ -47,38 +47,26 @@ export async function GET(request: Request) {
         };
       }
 
-      // 2. Fetch service items with filtering (only active items under active categories)
-      let query = supabaseAdmin
+      // 2. Fetch all active service items (only active items under active categories)
+      const { data: allItems, error: itemsErr } = await supabaseAdmin
         .from('service_items')
         .select('id, category_id, name, description, base_price, estimated_mins, icon_url, is_active, created_at, service_categories(name, icon_url)')
         .eq('is_active', true)
         .in('category_id', Array.from(activeCategoryIds));
 
-      if (categoryId) {
-        if (!activeCategoryIds.has(categoryId)) {
-          return { categories: [], items: [], activePromo: null };
-        }
-        query = query.eq('category_id', categoryId);
-      }
-
-      if (search) {
-        query = query.ilike('name', `%${search}%`);
-      }
-
-      const { data: items, error: itemsErr } = await query;
       if (itemsErr) throw itemsErr;
 
       // Filter items to ensure strict active category match
-      const activeItems = (items || []).filter(item => activeCategoryIds.has(item.category_id));
+      const allActiveItems = (allItems || []).filter(item => activeCategoryIds.has(item.category_id));
 
       // Fetch only necessary booking reviews mapping info (explicit select)
       const { data: bookingsData } = await supabaseAdmin
         .from('bookings')
         .select('service_item_id, reviews(rating)');
 
-      // Nest items under their corresponding category
+      // Nest items under their corresponding category using ALL active items so counts NEVER zero out
       const categoriesWithItems = (categories || []).map(cat => {
-        const catItems = activeItems.filter(item => item.category_id === cat.id);
+        const catItems = allActiveItems.filter(item => item.category_id === cat.id);
         
         const categoryItemIds = catItems.map(i => i.id);
         const catBookings = (bookingsData || []).filter(b => categoryItemIds.includes(b.service_item_id));
@@ -96,11 +84,30 @@ export async function GET(request: Request) {
         return {
           ...cat,
           items: catItems,
+          total_count: catItems.length,
           total_bookings: totalBookings || 12,
           total_reviews: totalReviews || 5,
           average_rating: avgRating
         };
       });
+
+      // Filter items if specific categoryId or search query requested
+      let filteredItems = allActiveItems;
+      if (categoryId) {
+        if (!activeCategoryIds.has(categoryId)) {
+          filteredItems = [];
+        } else {
+          filteredItems = filteredItems.filter(item => item.category_id === categoryId);
+        }
+      }
+
+      if (search) {
+        const q = search.toLowerCase().trim();
+        filteredItems = filteredItems.filter(item =>
+          item.name.toLowerCase().includes(q) ||
+          (item.description && item.description.toLowerCase().includes(q))
+        );
+      }
 
       // Fetch latest active promo code
       const { data: promos } = await supabaseAdmin
@@ -114,7 +121,8 @@ export async function GET(request: Request) {
 
       return {
         categories: categoriesWithItems,
-        items: activeItems,
+        items: filteredItems,
+        totalServices: allActiveItems.length,
         activePromo: activePromo ? {
           code: activePromo.code,
           description: activePromo.description,

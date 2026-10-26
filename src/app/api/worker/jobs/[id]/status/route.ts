@@ -93,12 +93,25 @@ export async function PATCH(
         }
 
         // Notify customer
+        const isScheduledManual = !!(booking.scheduled_at && new Date(booking.scheduled_at) > new Date());
+        const timeStrManual = isScheduledManual
+          ? new Date(booking.scheduled_at).toLocaleDateString('en-IN', {
+              timeZone: 'Asia/Kolkata',
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            })
+          : '';
+
         await dispatchNotification({
           userId: booking.customer_id,
           type: 'BOOKING_ACCEPTED',
-          title: 'Worker assigned',
-          body: 'A worker has been assigned to your booking.',
-          data: { booking_id: id, worker_id: workerId }
+          title: isScheduledManual ? '📅 Scheduled Captain Confirmed' : 'Captain Assigned',
+          body: isScheduledManual
+            ? `A verified captain is locked in for your scheduled appointment on ${timeStrManual}.`
+            : 'A verified captain has been assigned to your booking and is preparing for arrival.',
+          data: { booking_id: id, worker_id: workerId, is_scheduled: isScheduledManual }
         });
 
         // Audit Log
@@ -143,12 +156,25 @@ export async function PATCH(
       }
 
       // Notify customer
+      const isScheduledAuto = !!(booking.scheduled_at && new Date(booking.scheduled_at) > new Date());
+      const timeStrAuto = isScheduledAuto
+        ? new Date(booking.scheduled_at).toLocaleDateString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+        : '';
+
       await dispatchNotification({
         userId: booking.customer_id,
         type: 'BOOKING_ACCEPTED',
-        title: 'Worker assigned',
-        body: 'A worker has been assigned to your booking.',
-        data: { booking_id: id, worker_id: workerId }
+        title: isScheduledAuto ? '📅 Scheduled Captain Confirmed' : 'Captain Assigned',
+        body: isScheduledAuto
+          ? `A verified captain is locked in for your scheduled appointment on ${timeStrAuto}.`
+          : 'A verified captain has been assigned to your booking and is preparing for arrival.',
+        data: { booking_id: id, worker_id: workerId, is_scheduled: isScheduledAuto }
       });
 
       return NextResponse.json({ success: true });

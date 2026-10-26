@@ -112,7 +112,7 @@ export const bookingStatusUpdateSchema = z.object({
 // ---------------------------------------------------------
 
 export const sosTriggerSchema = z.object({
-  booking_id: z.string().regex(UUID_REGEX).optional(),
-  lat: z.number().min(-90).max(90).optional(),
-  lng: z.number().min(-180).max(180).optional()
-}).strict();
+  booking_id: z.string().regex(UUID_REGEX).optional().nullable(),
+  lat: z.number().min(-90).max(90).optional().nullable(),
+  lng: z.number().min(-180).max(180).optional().nullable()
+});

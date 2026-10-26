@@ -49,7 +49,8 @@ export async function startAssignment(bookingId: string): Promise<string> {
       payment_mode,
       service_item_id,
       service_items (
-        category_id
+        category_id,
+        skill_tag
       )
     `)
     .eq('id', bookingId)
@@ -64,6 +65,7 @@ export async function startAssignment(bookingId: string): Promise<string> {
   }
 
   const categoryId = (booking as any).service_items?.category_id || null;
+  const skillTag = (booking as any).service_items?.skill_tag || null;
 
   // 2. Get search radius from platform_settings
   const { data: radiusData } = await supabaseAdmin
@@ -82,7 +84,8 @@ export async function startAssignment(bookingId: string): Promise<string> {
       p_radius_km: radiusKm,
       p_service_category_id: categoryId,
       p_booking_id: bookingId,
-      p_payment_mode: booking.payment_mode
+      p_payment_mode: booking.payment_mode,
+      p_skill_tag: skillTag
     }
   );
 
@@ -193,12 +196,36 @@ export async function broadcastToGroup(
 
   const workerIds = workers.map(w => w.worker_id);
 
+  // Fetch booking details to provide explicit scheduled time to workers
+  const { data: bookingData } = await supabaseAdmin
+    .from('bookings')
+    .select('booking_type, scheduled_at, service_items(name)')
+    .eq('id', bookingId)
+    .single();
+
+  const isScheduled = !!(bookingData?.scheduled_at && new Date(bookingData.scheduled_at) > new Date());
+  const dateFormatted = isScheduled
+    ? new Date(bookingData!.scheduled_at).toLocaleDateString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    : '';
+
+  const serviceName = (bookingData?.service_items as any)?.name || 'Home Service';
+  const title = isScheduled ? '📅 New Scheduled Job Request' : '⚡ New Job Request';
+  const body = isScheduled
+    ? `New ${serviceName} scheduled for ${dateFormatted} near you. Accept to lock in shift.`
+    : `A new ${serviceName} is available near you for immediate dispatch.`;
+
   const success = await dispatchBulkNotifications({
     userIds: workerIds,
     type: 'BOOKING_REQUEST',
-    title: 'New job request',
-    body: 'A new job is available near you.',
-    data: { booking_id: bookingId }
+    title,
+    body,
+    data: { booking_id: bookingId, is_scheduled: isScheduled }
   });
 
   if (!success) {
@@ -260,7 +287,7 @@ export async function advanceAssignment(queueId: string): Promise<string> {
   // 3. Verify linked booking is still PENDING_ASSIGNMENT
   const { data: booking, error: bookingErr } = await supabaseAdmin
     .from('bookings')
-    .select('status, lat, lng, payment_mode, service_items(category_id)')
+    .select('status, lat, lng, payment_mode, service_items(category_id, skill_tag)')
     .eq('id', queue.booking_id)
     .single();
 
@@ -294,6 +321,7 @@ export async function advanceAssignment(queueId: string): Promise<string> {
       .single();
     const radiusKm = radiusData ? parseFloat(radiusData.value) : 10;
     const categoryId = (booking as any).service_items?.category_id || null;
+    const skillTag = (booking as any).service_items?.skill_tag || null;
 
     // Query nearby eligible workers again
     const { data: workers } = await supabaseAdmin.rpc(
@@ -304,7 +332,8 @@ export async function advanceAssignment(queueId: string): Promise<string> {
         p_radius_km: radiusKm,
         p_service_category_id: categoryId,
         p_booking_id: queue.booking_id,
-        p_payment_mode: booking.payment_mode
+        p_payment_mode: booking.payment_mode,
+        p_skill_tag: skillTag
       }
     );
 

@@ -52,6 +52,61 @@ export async function GET(
       return NextResponse.json({ error: 'Access denied.' }, { status: 403 });
     }
 
+    // Check if auto-assignment broadcast has expired without captain approval
+    if (booking.status === 'PENDING_ASSIGNMENT' && !booking.worker_id) {
+      const { data: queue } = await supabaseAdmin
+        .from('assignment_queue')
+        .select('*')
+        .eq('booking_id', booking.id)
+        .maybeSingle();
+
+      const nowIso = new Date().toISOString();
+      const isQueueExpired = queue && (
+        queue.status === 'FAILED' ||
+        (queue.status === 'BROADCASTING' && queue.group_expires_at && queue.group_expires_at < nowIso)
+      );
+
+      const createdAtMs = new Date(booking.created_at).getTime();
+      const elapsedMs = Date.now() - createdAtMs;
+      const isTimeout = !queue && elapsedMs > 120000;
+
+      if (isQueueExpired || isTimeout) {
+        await supabaseAdmin
+          .from('bookings')
+          .update({
+            status: 'MANUAL_ASSIGNMENT_REQUIRED',
+            updated_at: nowIso
+          })
+          .eq('id', booking.id);
+
+        if (queue && queue.status === 'BROADCASTING') {
+          await supabaseAdmin
+            .from('assignment_queue')
+            .update({ status: 'FAILED', updated_at: nowIso })
+            .eq('id', queue.id);
+        }
+
+        // Alert admins for manual assignment
+        const { data: admins } = await supabaseAdmin
+          .from('users')
+          .select('id')
+          .eq('role', 'admin');
+
+        if (admins && admins.length > 0) {
+          const { dispatchBulkNotifications } = await import('@/lib/notification-dispatcher');
+          dispatchBulkNotifications({
+            userIds: admins.map((a: any) => a.id),
+            type: 'MANUAL_ASSIGNMENT_CREATED',
+            title: 'Manual Assignment Alert',
+            body: `No captain accepted booking #${booking.id.substring(0, 8).toUpperCase()} within the auto-assignment window. Manual assignment required.`,
+            data: { booking_id: booking.id }
+          }).catch((err) => console.error('Failed to notify admins of manual assignment:', err));
+        }
+
+        booking.status = 'MANUAL_ASSIGNMENT_REQUIRED';
+      }
+    }
+
     const bookingId = booking.id;
     const slug = getBookingSlug(booking);
 
@@ -146,21 +201,11 @@ export async function PATCH(
         return NextResponse.json({ error: 'Cannot cancel completed or already cancelled bookings.' }, { status: 400 });
       }
 
-      // Customer can only cancel until a worker is assigned
-      if (booking.status !== 'PENDING_ASSIGNMENT' || booking.worker_id) {
+      // Customer can cancel until the captain approves/accepts
+      const nonCancellableStatuses = ['WORKER_ACCEPTED', 'ON_THE_WAY', 'ARRIVED', 'IN_PROGRESS'];
+      if (nonCancellableStatuses.includes(booking.status)) {
         return NextResponse.json({
-          error: 'Cannot cancel booking once a captain has been assigned.'
-        }, { status: 400 });
-      }
-
-      // 2-minute cancellation buffer time check
-      const createdAtTime = new Date(booking.created_at).getTime();
-      const elapsedMs = Date.now() - createdAtTime;
-      const bufferMs = 2 * 60 * 1000;
-
-      if (elapsedMs > bufferMs) {
-        return NextResponse.json({
-          error: 'Cancellation buffer expired. Bookings can only be cancelled within 2 minutes of placement and before captain assignment.'
+          error: 'Cannot cancel booking once a captain has accepted and approved the assignment.'
         }, { status: 400 });
       }
 
@@ -191,7 +236,7 @@ export async function PATCH(
           .from('assignment_queue')
           .update({ status: 'CANCELLED', updated_at: new Date().toISOString() })
           .eq('booking_id', id)
-          .eq('status', 'PENDING');
+          .in('status', ['BROADCASTING', 'PENDING', 'PROCESSING']);
       } catch (queueErr) {
         console.error('Failed to cancel assignment queue for booking:', queueErr);
       }

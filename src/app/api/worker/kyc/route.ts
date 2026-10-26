@@ -108,17 +108,21 @@ export async function GET(request: Request) {
     // Fetch active categories (strictly active, ordered, and deduplicated)
     const { data: rawCategories } = await supabaseAdmin
       .from('service_categories')
-      .select('id, name')
+      .select('id, name, skills')
       .eq('is_active', true)
       .order('sort_order', { ascending: true });
 
     const seenCategoryNames = new Set<string>();
-    const categories: Array<{ id: string; name: string }> = [];
+    const categories: Array<{ id: string; name: string; skills: string[] }> = [];
     (rawCategories || []).forEach((c: any) => {
       const normalized = (c.name || '').trim().toLowerCase();
       if (normalized && !seenCategoryNames.has(normalized)) {
         seenCategoryNames.add(normalized);
-        categories.push({ id: c.id, name: c.name.trim() });
+        categories.push({
+          id: c.id,
+          name: c.name.trim(),
+          skills: Array.isArray(c.skills) ? c.skills : []
+        });
       }
     });
 
@@ -369,16 +373,15 @@ export async function POST(request: Request) {
         if (updateUserErr) throw updateUserErr;
       }
 
-      // Save/Update skills in worker_profiles (Worker can only choose ONE service trade)
+      // Save/Update skills in worker_profiles
       if (Array.isArray(skills) && skills.length > 0) {
-        // Enforce only 1 service trade
-        const singleSkill = [skills[0]];
+        const cleanSkills = skills.map((s: any) => String(s).trim()).filter(Boolean);
 
         const { error: profileErr } = await supabaseAdmin
           .from('worker_profiles')
           .upsert({
             worker_id: workerId,
-            skills: singleSkill,
+            skills: cleanSkills,
             city: 'Bangalore',
             state: 'Karnataka',
             updated_at: new Date().toISOString()
@@ -386,24 +389,27 @@ export async function POST(request: Request) {
 
         if (profileErr) throw profileErr;
 
-        // Match the single chosen skill to the active service category ID
+        // Match the trade/skills to the active service category ID
         try {
           const { data: dbCategories } = await supabaseAdmin
             .from('service_categories')
-            .select('id, name')
+            .select('id, name, skills')
             .eq('is_active', true);
 
           let matchedCategoryId: string | null = null;
           if (dbCategories && dbCategories.length > 0) {
-            const skillLower = singleSkill[0].toLowerCase().trim();
             for (const cat of dbCategories) {
               const catNameLower = cat.name.toLowerCase().trim();
-              if (
-                skillLower === catNameLower ||
-                skillLower.includes(catNameLower) ||
-                catNameLower.includes(skillLower) ||
-                (skillLower.length >= 4 && catNameLower.length >= 4 && skillLower.slice(0, 4) === catNameLower.slice(0, 4))
-              ) {
+              const hasMatchingSkill = cleanSkills.some((s: string) => {
+                const sLower = s.toLowerCase().trim();
+                return sLower === catNameLower ||
+                  sLower.includes(catNameLower) ||
+                  catNameLower.includes(sLower) ||
+                  (sLower.length >= 4 && catNameLower.length >= 4 && sLower.slice(0, 4) === catNameLower.slice(0, 4)) ||
+                  (Array.isArray(cat.skills) && cat.skills.some((cs: string) => cs.toLowerCase().trim() === sLower));
+              });
+
+              if (hasMatchingSkill) {
                 matchedCategoryId = cat.id;
                 break;
               }

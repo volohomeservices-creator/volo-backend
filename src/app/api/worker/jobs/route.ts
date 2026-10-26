@@ -76,13 +76,50 @@ export async function GET(request: Request) {
 
       if (broadcastErr) throw broadcastErr;
 
-      // Lazy cleanup of any stale broadcasting queues in the background
+      // Lazy transition of any stale broadcasting queues to MANUAL_ASSIGNMENT_REQUIRED
       supabaseAdmin
         .from('assignment_queue')
-        .update({ status: 'FAILED', updated_at: nowIso })
+        .select('id, booking_id')
         .eq('status', 'BROADCASTING')
         .lt('group_expires_at', nowIso)
-        .then(() => {});
+        .then(async ({ data: staleQueues }: any) => {
+          if (!staleQueues || staleQueues.length === 0) return;
+          const staleQueueIds = staleQueues.map((q: any) => q.id);
+          const staleBookingIds = staleQueues.map((q: any) => q.booking_id);
+
+          await supabaseAdmin
+            .from('assignment_queue')
+            .update({ status: 'FAILED', updated_at: nowIso })
+            .in('id', staleQueueIds);
+
+          await supabaseAdmin
+            .from('bookings')
+            .update({ status: 'MANUAL_ASSIGNMENT_REQUIRED', updated_at: nowIso })
+            .in('id', staleBookingIds)
+            .eq('status', 'PENDING_ASSIGNMENT');
+
+          const { data: admins } = await supabaseAdmin
+            .from('users')
+            .select('id')
+            .eq('role', 'admin');
+
+          if (admins && admins.length > 0) {
+            const { dispatchBulkNotifications } = await import('@/lib/notification-dispatcher');
+            const adminUserIds = admins.map((a: any) => a.id);
+            for (const bId of staleBookingIds) {
+              await dispatchBulkNotifications({
+                userIds: adminUserIds,
+                type: 'MANUAL_ASSIGNMENT_CREATED',
+                title: 'Manual Assignment Alert',
+                body: `Captain auto-assignment expired for booking #${bId.substring(0, 8).toUpperCase()}. Manual assignment required.`,
+                data: { booking_id: bId }
+              }).catch(() => {});
+            }
+          }
+        })
+        .catch(err => {
+          console.error('[Worker Jobs] Error transitioning stale queues to manual assignment:', err);
+        });
 
       // D. Filter broadcasting bookings in memory:
       // - Must not be expired (2-minute window)

@@ -147,7 +147,7 @@ export async function POST(request: Request) {
             .select('user_id, role')
             .eq('referral_code', ref_code.trim().toUpperCase())
             .eq('active', true)
-            .single();
+            .maybeSingle();
 
           if (refCodeRow && refCodeRow.user_id !== user_id) {
             // Get the reward amount for this role
@@ -156,7 +156,7 @@ export async function POST(request: Request) {
               .select('referrer_reward')
               .eq('role', refCodeRow.role)
               .eq('active', true)
-              .single();
+              .maybeSingle();
 
             await supabaseAdmin
               .from('referrals')

@@ -366,11 +366,25 @@ export async function POST(request: Request) {
 
     // Online bookings stay undispatched until Razorpay confirms the payment.
     if (payment_mode !== 'ONLINE') {
+      const isScheduled = !!(scheduled_at && new Date(scheduled_at) > new Date());
+      const formattedDate = isScheduled
+        ? new Date(scheduled_at).toLocaleDateString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+        : '';
+
       await dispatchNotification({
         userId: customerId,
         type: 'BOOKING_CREATED',
-        title: 'Booking Confirmed',
-        body: `Your service request for ${item.name} is successfully registered.`
+        title: isScheduled ? '📅 Scheduled Booking Confirmed' : 'Booking Confirmed',
+        body: isScheduled
+          ? `Your service request for ${item.name} is scheduled for ${formattedDate}. Certified captain matching is underway.`
+          : `Your service request for ${item.name} is successfully registered. Matching nearby certified captains.`,
+        data: { booking_id: booking.id, is_scheduled: isScheduled }
       });
 
       startAssignment(booking.id).catch(err => {

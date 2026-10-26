@@ -12,7 +12,7 @@ export async function GET(request: Request) {
     // Fetch user details for profile completeness (optimized select fields)
     const { data: user, error: userErr } = await supabaseAdmin
       .from('users')
-      .select('id, full_name, email, avatar_url, is_prime, volo_coins')
+      .select('id, full_name, email, avatar_url, volo_coins')
       .eq('id', customerId)
       .single();
 
@@ -50,41 +50,34 @@ export async function GET(request: Request) {
       b.status === 'WORKER_ACCEPTED'
     ).length;
 
-    // Upcoming: bookings scheduled in the future that are not completed or cancelled
-    const nowStr = new Date().toISOString();
+    // Upcoming & active booked services: bookings that are not completed or cancelled
     const upcomingBookings = bookings.filter(b => 
       b.status !== 'COMPLETED' && 
-      b.status !== 'CANCELLED' && 
-      b.scheduled_at && 
-      b.scheduled_at > nowStr
+      b.status !== 'CANCELLED'
     ).length;
 
-    // Active Bookings: en route, arrived, work started
+    // Active Bookings: any open, assigned, or in-flight bookings
     const activeList = bookings.filter(b => 
-      b.status === 'ON_THE_WAY' || 
-      b.status === 'ARRIVED' || 
-      b.status === 'IN_PROGRESS'
+      b.status !== 'COMPLETED' && 
+      b.status !== 'CANCELLED'
     );
 
-    // Profile completion calculation:
-    // Fields tracked: full_name, email, avatar_url, address, city, state. (is_active, phone are guaranteed)
-    let completedFields = 2; // user ID and phone number are guaranteed
-    const totalFields = 8;
+    // Profile completion calculation for customer:
+    // Fields tracked: phone (guaranteed), full_name, email, default address
+    let completedFields = 1; // phone number is guaranteed
+    const totalFields = 4;
     if (user.full_name) completedFields++;
     if (user.email) completedFields++;
-    if (user.avatar_url) completedFields++;
     
-    // We check address and city/state from users or first default customer_address if exists
+    // Check if default customer_address exists
     const { data: defaultAddr } = await supabaseAdmin
       .from('customer_addresses')
-      .select('*')
+      .select('id, address')
       .eq('customer_id', customerId)
       .eq('is_default', true)
       .maybeSingle();
 
-    if (defaultAddr) {
-      if (defaultAddr.address) completedFields += 3; // counts address, city, state
-    }
+    if (defaultAddr && defaultAddr.address) completedFields++;
 
     const profileCompletion = Math.min(100, Math.round((completedFields / totalFields) * 100));
 
@@ -103,8 +96,8 @@ export async function GET(request: Request) {
         full_name: user.full_name,
         avatar_url: user.avatar_url,
         email: user.email,
-        is_prime: user.is_prime,
-        volo_coins: user.volo_coins
+        volo_coins: user.volo_coins,
+        has_address: !!(defaultAddr && defaultAddr.address)
       },
       profileCompletion,
       metrics: {
@@ -115,12 +108,10 @@ export async function GET(request: Request) {
       },
       upcomingBookingsList: bookings.filter(b => 
         b.status !== 'COMPLETED' && 
-        b.status !== 'CANCELLED' && 
-        b.scheduled_at && 
-        b.scheduled_at > nowStr
-      ).slice(0, 5),
+        b.status !== 'CANCELLED'
+      ),
       activeBookings: activeList,
-      recentBookings: bookings.slice(0, 5),
+      recentBookings: bookings,
       recentReviews: reviews || [],
       activePromos: activePromos.map(p => ({
         id: p.id,

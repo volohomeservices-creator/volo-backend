@@ -7,7 +7,7 @@ export async function getManualAssignmentCandidates(bookingId: string): Promise<
     // 1. Fetch booking location details
     const { data: booking, error: bookingErr } = await supabaseAdmin
       .from('bookings')
-      .select('lat, lng, service_item_id, payment_mode, service_items(category_id)')
+      .select('lat, lng, service_item_id, payment_mode, service_items(category_id, skill_tag)')
       .eq('id', bookingId)
       .single();
 
@@ -17,6 +17,7 @@ export async function getManualAssignmentCandidates(bookingId: string): Promise<
     }
 
     const categoryId = (booking as any).service_items?.category_id || null;
+    const skillTag = (booking as any).service_items?.skill_tag || null;
 
     // 2. Fetch search radius from platform_settings
     const { data: radiusData } = await supabaseAdmin
@@ -36,7 +37,8 @@ export async function getManualAssignmentCandidates(bookingId: string): Promise<
         p_radius_km: radiusKm,
         p_service_category_id: categoryId,
         p_booking_id: bookingId,
-        p_payment_mode: 'ONLINE' // Manual assignment overrides COD wallet balance check
+        p_payment_mode: 'ONLINE', // Manual assignment overrides COD wallet balance check
+        p_skill_tag: skillTag
       }
     );
 
