@@ -76,28 +76,76 @@ export async function PATCH(request: Request) {
 
     if (updateErr) throw updateErr;
 
-    // Credit referrer's wallet
+    // Credit referrer's wallet & insert transaction statement record
     const rewardAmount = Number(referral.reward_amount || 0);
-    if (rewardAmount > 0 && referral.role === 'customer') {
-      try {
-        // Try direct wallet upsert
-        const { data: wallet } = await supabaseAdmin
-          .from('customer_wallets')
-          .select('id, balance')
-          .eq('customer_id', referral.referrer_id)
-          .single();
+    if (rewardAmount > 0) {
+      if (referral.role === 'customer') {
+        try {
+          const { data: wallet } = await supabaseAdmin
+            .from('customer_wallets')
+            .select('id, balance')
+            .eq('customer_id', referral.referrer_id)
+            .maybeSingle();
 
-        if (wallet) {
-          await supabaseAdmin
-            .from('customer_wallets')
-            .update({ balance: Number(wallet.balance) + rewardAmount })
-            .eq('id', wallet.id);
-        } else {
-          await supabaseAdmin
-            .from('customer_wallets')
-            .insert({ customer_id: referral.referrer_id, balance: rewardAmount });
+          if (wallet) {
+            await supabaseAdmin
+              .from('customer_wallets')
+              .update({ balance: Number(wallet.balance) + rewardAmount })
+              .eq('id', wallet.id);
+          } else {
+            await supabaseAdmin
+              .from('customer_wallets')
+              .insert({ customer_id: referral.referrer_id, balance: rewardAmount });
+          }
+
+          // Insert into customer_wallet_transactions
+          await supabaseAdmin.from('customer_wallet_transactions').insert({
+            customer_id: referral.referrer_id,
+            amount: rewardAmount,
+            type: 'CREDIT',
+            description: 'Referral Bonus - Friend Invite'
+          });
+        } catch (walletErr) {
+          console.error('[Admin Referrals] Customer wallet/txn credit failed:', walletErr);
         }
-      } catch (_) { /* non-fatal: wallet credit failed */ }
+      } else if (referral.role === 'worker') {
+        try {
+          const { data: wallet } = await supabaseAdmin
+            .from('worker_wallets')
+            .select('balance')
+            .eq('worker_id', referral.referrer_id)
+            .maybeSingle();
+
+          const prevBal = Number(wallet?.balance || 0);
+          const newBal = prevBal + rewardAmount;
+
+          if (wallet) {
+            await supabaseAdmin
+              .from('worker_wallets')
+              .update({
+                balance: newBal,
+                updated_at: new Date().toISOString()
+              })
+              .eq('worker_id', referral.referrer_id);
+          } else {
+            await supabaseAdmin
+              .from('worker_wallets')
+              .insert({ worker_id: referral.referrer_id, balance: newBal });
+          }
+
+          // Insert into wallet_transactions
+          await supabaseAdmin.from('wallet_transactions').insert({
+            worker_id: referral.referrer_id,
+            type: 'CREDIT',
+            amount: rewardAmount,
+            balance_before: prevBal,
+            balance_after: newBal,
+            description: 'Captain Referral Bonus - Recruitment Reward'
+          });
+        } catch (workerWalletErr) {
+          console.error('[Admin Referrals] Worker wallet/txn credit failed:', workerWalletErr);
+        }
+      }
     }
 
     // Notify the referrer

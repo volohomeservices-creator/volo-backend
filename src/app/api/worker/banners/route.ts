@@ -64,9 +64,9 @@ export async function GET(request: Request) {
       activePromos.forEach((p: any) => {
         mergedBanners.push({
           id: `worker-incentive-${p.id}`,
-          title: `Incentive: Code ${p.code}`,
+          title: `Captain Incentive: Code ${p.code}`,
           subtitle: p.description || `Earn extra ${p.discount_type === 'PERCENT' ? `${p.discount_value}%` : `₹${p.discount_value}`} on completing target bookings!`,
-          discount_label: 'WORKER INCENTIVE',
+          discount_label: 'CAPTAIN INCENTIVE',
           action_url: '/worker/dashboard',
           placement: platform === 'web' ? 'WORKER_WEB' : 'WORKER_HERO',
           active: true,

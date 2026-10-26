@@ -608,7 +608,7 @@ export async function GET(
             admin_notes,
             processed_at,
             created_at,
-            users (
+            users:users!account_deletion_requests_user_id_fkey (
               full_name,
               email,
               is_active
@@ -617,6 +617,7 @@ export async function GET(
           .order('created_at', { ascending: false });
 
         if (error) {
+          console.error('[Admin Deletion Requests] DB error:', error);
           return NextResponse.json({ requests: [], total: 0 });
         }
 
@@ -2236,6 +2237,40 @@ export async function POST(
       return NextResponse.json({ success: true, settings: settingsPayload });
     }
 
+    // G.1.5 customers/[id] - Edit Customer Details or Status
+    if (slug[0] === 'customers' && slug.length === 2) {
+      const customerId = slug[1];
+      const { data: body, errorResponse } = await validateBody(request, z.any());
+      if (errorResponse) return errorResponse;
+
+      const updateData: any = {};
+      if (body.full_name !== undefined) updateData.full_name = body.full_name;
+      if (body.email !== undefined) updateData.email = body.email;
+      if (body.phone !== undefined) updateData.phone = body.phone;
+      if (body.is_active !== undefined) updateData.is_active = Boolean(body.is_active);
+
+      const { data: updatedUser, error } = await supabaseAdmin
+        .from('users')
+        .update(updateData)
+        .eq('id', customerId)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+
+      if (updateData.is_active !== undefined) {
+        await logAuditAction({
+          admin_id: session.user_id,
+          action: updateData.is_active ? AuditAction.CUSTOMER_ACTIVATED : AuditAction.CUSTOMER_DEACTIVATED,
+          target_type: 'customer',
+          target_id: customerId,
+          metadata: { updated_fields: Object.keys(updateData) }
+        });
+      }
+
+      return NextResponse.json({ success: true, customer: updatedUser, user: updatedUser });
+    }
+
     // G.2 customers/[id]/status
     if (slug[0] === 'customers' && slug.length === 3 && slug[2] === 'status') {
       const customerId = slug[1];
@@ -2302,24 +2337,43 @@ export async function POST(
       }
 
       if (action === 'APPROVE_PURGE') {
-        if (reqItem.user_id) {
+        let targetUserId = reqItem.user_id;
+        if (!targetUserId && reqItem.phone) {
+          const { data: u } = await supabaseAdmin
+            .from('users')
+            .select('id')
+            .eq('phone', reqItem.phone)
+            .maybeSingle();
+          if (u) targetUserId = u.id;
+        }
+
+        if (targetUserId) {
           await supabaseAdmin
             .from('users')
             .update({
-              full_name: 'Deleted User',
+              full_name: 'Deactivated User',
               email: null,
-              phone: `+910000000000_deleted_${reqItem.user_id.slice(0, 8)}`,
+              phone: `+910000000000_deleted_${targetUserId.slice(0, 8)}`,
               avatar_url: null,
               is_active: false,
               is_suspended: true,
             })
-            .eq('id', reqItem.user_id);
+            .eq('id', targetUserId);
+
+          try {
+            await supabaseAdmin
+              .from('workers')
+              .update({ status: 'OFFLINE', is_available: false })
+              .eq('id', targetUserId);
+          } catch (e) {
+            // ignore if table not present
+          }
 
           try {
             await supabaseAdmin
               .from('customer_addresses')
               .delete()
-              .eq('customer_id', reqItem.user_id);
+              .eq('customer_id', targetUserId);
           } catch (e) {
             // ignore if table not present
           }
@@ -2328,11 +2382,12 @@ export async function POST(
             await supabaseAdmin
               .from('fcm_tokens')
               .delete()
-              .eq('user_id', reqItem.user_id);
+              .eq('user_id', targetUserId);
           } catch (e) {
             // ignore if table not present
           }
         }
+
 
         await supabaseAdmin
           .from('account_deletion_requests')

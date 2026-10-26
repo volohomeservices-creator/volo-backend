@@ -218,7 +218,7 @@ export async function finalizeBookingFinancials(bookingId: string): Promise<bool
       .update({ status: 'PAID' })
       .eq('booking_id', booking.id);
 
-    // 5. Automatic Referral Qualification Check
+    // 5. Automatic Referral Qualification Check (Customer)
     if (booking.customer_id) {
       try {
         const { data: referral } = await supabaseAdmin
@@ -268,7 +268,55 @@ export async function finalizeBookingFinancials(bookingId: string): Promise<bool
           }
         }
       } catch (refErr) {
-        console.error('[Payment Service] Automatic referral check failed (non-fatal):', refErr);
+        console.error('[Payment Service] Automatic customer referral check failed (non-fatal):', refErr);
+      }
+    }
+
+    // 5b. Automatic Referral Qualification Check (Captain / Worker)
+    if (booking.worker_id) {
+      try {
+        const { data: workerRef } = await supabaseAdmin
+          .from('referrals')
+          .select('id, referrer_id, reward_amount, status, role')
+          .eq('referred_user_id', booking.worker_id)
+          .eq('status', 'PENDING')
+          .maybeSingle();
+
+        if (workerRef) {
+          const { data: settings } = await supabaseAdmin
+            .from('referral_settings')
+            .select('min_bookings_to_qualify')
+            .eq('role', 'worker')
+            .eq('active', true)
+            .maybeSingle();
+
+          const minBookings = settings?.min_bookings_to_qualify ?? 5;
+
+          const { count, error: countErr } = await supabaseAdmin
+            .from('bookings')
+            .select('id', { count: 'exact', head: true })
+            .eq('worker_id', booking.worker_id)
+            .eq('status', 'COMPLETED');
+
+          if (!countErr && count !== null && count >= minBookings) {
+            const { error: qualErr } = await supabaseAdmin
+              .from('referrals')
+              .update({ status: 'QUALIFIED' })
+              .eq('id', workerRef.id);
+
+            if (!qualErr) {
+              const { dispatchNotification } = await import('./notification-dispatcher');
+              await dispatchNotification({
+                userId: workerRef.referrer_id,
+                type: 'REFERRAL_QUALIFIED',
+                title: '🎉 Captain Referral Qualified!',
+                body: `Your referred captain has completed ${minBookings} jobs! Your recruitment reward of ₹${workerRef.reward_amount || 500} is qualified and pending admin processing.`,
+              });
+            }
+          }
+        }
+      } catch (refErr) {
+        console.error('[Payment Service] Automatic worker referral check failed (non-fatal):', refErr);
       }
     }
 

@@ -313,20 +313,82 @@ export async function DELETE(request: Request) {
     const session = await requireRole(request, 'worker');
     const workerId = session.user_id;
 
-    // Soft delete: set users.is_active = false
-    const { error } = await supabaseAdmin
+    // Fetch worker details
+    const { data: user } = await supabaseAdmin
       .from('users')
-      .update({ is_active: false })
-      .eq('id', workerId);
+      .select('id, full_name, phone, role')
+      .eq('id', workerId)
+      .single();
 
-    if (error) throw error;
+    if (!user) {
+      return NextResponse.json({ error: 'Worker not found' }, { status: 404 });
+    }
 
-    return NextResponse.json({ success: true, message: 'Account deactivated.' });
+    // Check if there is already a PENDING request
+    const { data: existingReq } = await supabaseAdmin
+      .from('account_deletion_requests')
+      .select('id, status, created_at')
+      .eq('user_id', workerId)
+      .eq('status', 'PENDING')
+      .maybeSingle();
+
+    if (existingReq) {
+      return NextResponse.json({
+        success: true,
+        pending: true,
+        message: 'Your account deactivation request is already under review by the admin team. Your account will remain active until approved.'
+      });
+    }
+
+    // Create deletion request with PENDING status
+    const { data: newReq, error: insertErr } = await supabaseAdmin
+      .from('account_deletion_requests')
+      .insert({
+        user_id: workerId,
+        phone: user.phone,
+        role: 'worker',
+        reason: 'Worker requested account deactivation via profile settings',
+        requested_via: 'APP',
+        status: 'PENDING'
+      })
+      .select('id')
+      .single();
+
+    if (insertErr) throw insertErr;
+
+    // Alert all admins via notifications
+    try {
+      const { data: admins } = await supabaseAdmin
+        .from('users')
+        .select('id')
+        .eq('role', 'admin');
+
+      if (admins && admins.length > 0) {
+        const notifInserts = admins.map((admin: any) => ({
+          user_id: admin.id,
+          type: 'ADMIN_BROADCAST',
+          title: '⚠️ Worker Account Deactivation Request',
+          body: `Worker/Captain ${user.full_name || user.phone} has requested account deactivation. Pending admin approval.`,
+          data: { type: 'ACCOUNT_DELETION_REQUEST', requestId: newReq?.id, role: 'worker' }
+        }));
+        await supabaseAdmin.from('notifications').insert(notifInserts);
+      }
+    } catch (notifErr) {
+      console.warn('Failed to notify admins of worker deactivation request:', notifErr);
+    }
+
+    // DO NOT deactivate the account here! Account remains active until admin approval.
+    return NextResponse.json({
+      success: true,
+      pending: true,
+      message: 'Your account deactivation request has been submitted to the admin team for review. Your account remains active until approved.'
+    });
   } catch (error: any) {
-    console.error('Error deactivating worker account:', error.message || error);
+    console.error('Error submitting worker deactivation request:', error.message || error);
     return NextResponse.json(
       { error: error.message || 'Internal server error' },
       { status: error.status || 500 }
     );
   }
 }
+
