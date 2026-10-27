@@ -9,7 +9,7 @@ VALUES
   ('min_customer_wallet_topup', '100', 'Minimum top-up amount for customer wallet (₹)'),
   ('max_customer_wallet_balance', '10000', 'Maximum customer wallet balance limit (₹)'),
   ('min_worker_wallet_topup', '100', 'Minimum top-up amount for worker wallet (₹)'),
-  ('customer_cancellation_travel_fee', '50', 'Travel compensation fee for late customer cancellation (₹)'),
+  ('customer_cancellation_travel_fee', '0', 'Travel compensation fee for late customer cancellation (₹) [DISABLED]'),
   ('inspection_fee', '99', 'Inspection / diagnosis fee if job cannot be completed (₹)'),
   ('worker_noshow_penalty', '50', 'Penalty deducted from worker on no-show (₹)'),
   ('worker_noshow_apology_credit', '50', 'Apology credit given to customer on partner no-show (₹)')

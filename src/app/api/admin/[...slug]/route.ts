@@ -61,10 +61,16 @@ async function getWorkerKycSync(workerId: string, adminStatus: string) {
       reason = allDocsApproved
         ? `The worker portal shows KYC approved${kycRow?.reviewed_at ? ` (reviewed ${new Date(kycRow.reviewed_at).toLocaleDateString('en-IN')})` : ''} and all ${REQUIRED_KYC_DOCUMENTS.length} documents are approved, but the account status used for going online and job dispatch is still ${adminStatus}. The worker sees "Approved" but cannot go online.`
         : `The worker portal shows KYC approved, but only ${approvedDocs} of ${REQUIRED_KYC_DOCUMENTS.length} documents are approved and the account status is ${adminStatus}. Review the documents before approving.`;
+    } else if (adminStatus === 'APPROVED' && portalStatus !== 'APPROVED') {
+      reason = `Account is marked Approved for job dispatch, but worker portal documents show ${portalStatus}. Syncing will update portal documents to Approved.`;
     } else {
       reason = `The worker portal shows KYC ${portalStatus}, but the account status is ${adminStatus}.`;
     }
   }
+
+  const canSync =
+    (portalStatus === 'APPROVED' && adminStatus !== 'APPROVED' && allDocsApproved) ||
+    (adminStatus === 'APPROVED' && portalStatus !== 'APPROVED');
 
   return {
     admin_status: adminStatus,
@@ -73,7 +79,7 @@ async function getWorkerKycSync(workerId: string, adminStatus: string) {
     documents_approved: approvedDocs,
     documents_required: REQUIRED_KYC_DOCUMENTS.length,
     in_sync: inSync,
-    can_sync: portalStatus === 'APPROVED' && adminStatus !== 'APPROVED' && allDocsApproved,
+    can_sync: canSync,
     reason,
   };
 }
@@ -1988,6 +1994,21 @@ export async function POST(
               .in('document_type', types);
           }
         }
+      } else if (action === 'APPROVE') {
+        // Auto-approve all documents when approving KYC
+        await supabaseAdmin
+          .from('worker_kyc')
+          .update({
+            aadhaar_status: 'APPROVED',
+            pan_status: 'APPROVED',
+            selfie_status: 'APPROVED'
+          })
+          .eq('worker_id', workerId);
+
+        await supabaseAdmin
+          .from('worker_documents')
+          .update({ status: 'APPROVED' })
+          .eq('worker_id', workerId);
       }
 
       // Dispatch alert notification
@@ -2034,30 +2055,64 @@ export async function POST(
         );
       }
 
-      const { error: updateErr } = await supabaseAdmin
-        .from('workers')
-        .update({ kyc_status: 'APPROVED' })
-        .eq('id', workerId);
+      if (worker.kyc_status === 'APPROVED' && kycSync.portal_status !== 'APPROVED') {
+        // Sync portal status and all documents to APPROVED
+        await supabaseAdmin
+          .from('worker_kyc')
+          .update({
+            overall_status: 'APPROVED',
+            aadhaar_status: 'APPROVED',
+            pan_status: 'APPROVED',
+            selfie_status: 'APPROVED',
+            reviewed_by: session.user_id,
+            reviewed_at: new Date().toISOString()
+          })
+          .eq('worker_id', workerId);
 
-      if (updateErr) throw updateErr;
+        await supabaseAdmin
+          .from('worker_documents')
+          .update({ status: 'APPROVED' })
+          .eq('worker_id', workerId);
 
-      const { createWallet, creditWorkerKycWelcomeBonus } = await import('@/lib/wallet-engine');
-      await createWallet(workerId);
-      await creditWorkerKycWelcomeBonus(workerId);
+        await logAuditAction({
+          admin_id: session.user_id,
+          action: AuditAction.WORKER_KYC_APPROVED,
+          target_type: 'worker',
+          target_id: workerId,
+          metadata: {
+            action: 'SYNC_TO_WORKER_KYC',
+            previous_portal_status: kycSync.portal_status,
+            reviewed_at: new Date().toISOString(),
+          }
+        });
 
-      await logAuditAction({
-        admin_id: session.user_id,
-        action: AuditAction.WORKER_KYC_APPROVED,
-        target_type: 'worker',
-        target_id: workerId,
-        metadata: {
-          action: 'SYNC_FROM_WORKER_KYC',
-          previous_status: worker.kyc_status,
-          reviewed_at: kycSync.reviewed_at,
-        }
-      });
+        return NextResponse.json({ success: true, kyc_status: 'APPROVED', portal_status: 'APPROVED' });
+      } else {
+        const { error: updateErr } = await supabaseAdmin
+          .from('workers')
+          .update({ kyc_status: 'APPROVED' })
+          .eq('id', workerId);
 
-      return NextResponse.json({ success: true, kyc_status: 'APPROVED' });
+        if (updateErr) throw updateErr;
+
+        const { createWallet, creditWorkerKycWelcomeBonus } = await import('@/lib/wallet-engine');
+        await createWallet(workerId);
+        await creditWorkerKycWelcomeBonus(workerId);
+
+        await logAuditAction({
+          admin_id: session.user_id,
+          action: AuditAction.WORKER_KYC_APPROVED,
+          target_type: 'worker',
+          target_id: workerId,
+          metadata: {
+            action: 'SYNC_FROM_WORKER_KYC',
+            previous_status: worker.kyc_status,
+            reviewed_at: kycSync.reviewed_at,
+          }
+        });
+
+        return NextResponse.json({ success: true, kyc_status: 'APPROVED' });
+      }
     }
 
     // D.2 workers/[id]/status
@@ -2216,6 +2271,11 @@ export async function POST(
     if (slug[0] === 'settings' && slug.length === 1) {
       const { data: settingsPayload, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
+
+      // Ensure late cancellation fee operation is strictly disabled across the platform
+      if (settingsPayload.customer_cancellation_travel_fee !== undefined) {
+        settingsPayload.customer_cancellation_travel_fee = '0';
+      }
 
       // Get old settings values first for audit logs comparison
       const { data: oldSettings } = await supabaseAdmin.from('platform_settings').select('*');

@@ -25,7 +25,7 @@ export async function GET() {
       max_customer_wallet_balance: Number(map['max_customer_wallet_balance'] || 10000),
       min_worker_wallet_topup: Number(map['min_worker_wallet_topup'] || 100),
       min_cod_wallet_balance: Number(map['min_cod_wallet_balance'] || 500),
-      customer_cancellation_travel_fee: Number(map['customer_cancellation_travel_fee'] || 50),
+      customer_cancellation_travel_fee: 0, // Late cancellation fee operations disabled across platform
       inspection_fee: Number(map['inspection_fee'] || 99),
       worker_noshow_penalty: Number(map['worker_noshow_penalty'] || 50),
       worker_noshow_apology_credit: Number(map['worker_noshow_apology_credit'] || 50)
@@ -43,7 +43,7 @@ export async function GET() {
       max_customer_wallet_balance: 10000,
       min_worker_wallet_topup: 100,
       min_cod_wallet_balance: 500,
-      customer_cancellation_travel_fee: 50,
+      customer_cancellation_travel_fee: 0, // Late cancellation fee operations disabled across platform
       inspection_fee: 99,
       worker_noshow_penalty: 50,
       worker_noshow_apology_credit: 50
