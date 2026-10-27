@@ -132,21 +132,13 @@ export async function filterRealNotifications(notifications: any[], workerId: st
     const bookingId = n.data?.booking_id;
     if (!bookingId) return true; // Keep system/non-booking notifications
 
-    const status = bookingStatusMap.get(bookingId);
-    if (!status) return false; // Filter out notifications for bookings that don't exist
-
-    // If it's a booking request or manual assignment, booking must be in active status
-    if (n.type === 'BOOKING_REQUEST' || n.type === 'MANUAL_ASSIGNMENT_CREATED') {
-      if (status !== 'PENDING_ASSIGNMENT' && status !== 'MANUAL_ASSIGNMENT_REQUIRED') {
-        return false;
-      }
-      // If the worker has already rejected this booking, filter it out
-      if (rejectedBookingIds.has(bookingId)) {
-        return false;
-      }
+    // If the worker has explicitly rejected this booking, hide the initial broadcasting request
+    if (n.type === 'BOOKING_REQUEST' && rejectedBookingIds.has(bookingId)) {
+      return false;
     }
 
     return true;
   });
 }
+
 

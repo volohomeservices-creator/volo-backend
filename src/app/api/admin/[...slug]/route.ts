@@ -9,6 +9,7 @@ import { AuditAction } from '@/types';
 import { dispatchNotification, dispatchBulkNotifications } from '@/lib/notification-dispatcher';
 import { memoryCache } from '@/lib/cache';
 import { parseBookingIdentifier, getUuidRangeForShortId } from '@/lib/booking-slug';
+import { toTitleCase } from '@/lib/title-case';
 
 
 // Helper to calculate date boundaries
@@ -661,7 +662,51 @@ export async function GET(
       if (dateTo) query = query.lte('created_at', dateTo);
 
       if (search) {
-        query = query.or(`full_name.ilike.%${search}%`, { foreignTable: 'users' });
+        const cleanSearch = search.trim().replace(/^#/, '');
+
+        // 1. Find matching customer users by full_name or phone
+        const { data: matchedUsers } = await supabaseAdmin
+          .from('users')
+          .select('id')
+          .or(`full_name.ilike.%${cleanSearch}%,phone.ilike.%${cleanSearch}%`)
+          .limit(100);
+
+        const matchedCustomerIds = (matchedUsers || []).map((u: any) => u.id);
+
+        // 2. Check if cleanSearch matches booking ID
+        const isHexSearch = /^[0-9a-fA-F-]{4,36}$/.test(cleanSearch);
+        let matchedBookingIds: string[] = [];
+
+        if (isHexSearch) {
+          if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanSearch)) {
+            matchedBookingIds = [cleanSearch.toLowerCase()];
+          } else {
+            const { data: recentBookings } = await supabaseAdmin
+              .from('bookings')
+              .select('id')
+              .limit(1000);
+            matchedBookingIds = (recentBookings || [])
+              .map((b: any) => b.id)
+              .filter((id: string) => id.toLowerCase().includes(cleanSearch.toLowerCase()));
+          }
+        }
+
+        const candidateBookingIds = Array.from(new Set(matchedBookingIds));
+
+        if (matchedCustomerIds.length > 0 && candidateBookingIds.length > 0) {
+          query = query.or(`customer_id.in.(${matchedCustomerIds.join(',')}),id.in.(${candidateBookingIds.join(',')})`);
+        } else if (matchedCustomerIds.length > 0) {
+          query = query.in('customer_id', matchedCustomerIds);
+        } else if (candidateBookingIds.length > 0) {
+          query = query.in('id', candidateBookingIds);
+        } else {
+          return NextResponse.json({
+            bookings: [],
+            total: 0,
+            page,
+            totalPages: 0
+          });
+        }
       }
 
       const { data: bookings, count, error } = await query
@@ -1680,14 +1725,17 @@ export async function POST(
         return NextResponse.json({ error: 'Missing category name' }, { status: 400 });
       }
 
+      const formattedName = toTitleCase(name);
+      const formattedSkills = Array.isArray(skills) ? skills.map((s: string) => toTitleCase(s)) : [];
+
       const { data: newCategory, error } = await supabaseAdmin
         .from('service_categories')
         .insert({
-          name,
+          name: formattedName,
           icon_url: icon_url || null,
           sort_order: sort_order || 0,
           is_active: true,
-          skills: Array.isArray(skills) ? skills : []
+          skills: formattedSkills
         })
         .select('*')
         .single();
@@ -1701,7 +1749,7 @@ export async function POST(
         action: AuditAction.SERVICE_CREATED,
         target_type: 'service_category',
         target_id: newCategory.id,
-        metadata: { category_name: name }
+        metadata: { category_name: formattedName }
       });
 
       return NextResponse.json(newCategory);
@@ -1712,6 +1760,13 @@ export async function POST(
       const categoryId = slug[2];
       const { data: updateFields, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
+
+      if (updateFields.name) {
+        updateFields.name = toTitleCase(updateFields.name);
+      }
+      if (Array.isArray(updateFields.skills)) {
+        updateFields.skills = updateFields.skills.map((s: string) => toTitleCase(s));
+      }
 
       const { data: updatedCategory, error } = await supabaseAdmin
         .from('service_categories')
@@ -1752,16 +1807,19 @@ export async function POST(
         return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
       }
 
+      const formattedName = toTitleCase(name);
+      const formattedSkillTag = skill_tag ? toTitleCase(skill_tag) : null;
+
       const { data: newService, error } = await supabaseAdmin
         .from('service_items')
         .insert({
           category_id,
-          name,
+          name: formattedName,
           description,
           base_price,
           estimated_mins: estimated_mins || 60,
           icon_url: icon_url || null,
-          skill_tag: skill_tag || null,
+          skill_tag: formattedSkillTag,
           is_active: true
         })
         .select('*')
@@ -1777,11 +1835,12 @@ export async function POST(
         action: AuditAction.SERVICE_CREATED,
         target_type: 'service',
         target_id: newService.id,
-        metadata: { service_name: name, base_price }
+        metadata: { service_name: formattedName, base_price }
       });
 
       return NextResponse.json({ success: true, service: newService });
     }
+
 
     // B. manual-assignment
     if (slug[0] === 'manual-assignment' && slug.length === 1) {
@@ -2243,6 +2302,13 @@ export async function POST(
       const serviceId = slug[1];
       const { data: updateFields, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
+
+      if (updateFields.name) {
+        updateFields.name = toTitleCase(updateFields.name);
+      }
+      if (updateFields.skill_tag) {
+        updateFields.skill_tag = toTitleCase(updateFields.skill_tag);
+      }
 
       const { data: updatedService, error } = await supabaseAdmin
         .from('service_items')

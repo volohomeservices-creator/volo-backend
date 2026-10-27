@@ -67,7 +67,7 @@ export async function GET(request: Request) {
     const inProgressJobsCount = bookings.filter(b => ['IN_PROGRESS', 'ON_THE_WAY', 'ARRIVED', 'WORKER_ACCEPTED'].includes(b.status)).length;
     const notificationsRaw = notificationsRes.data || [];
     const filteredNotifications = await filterRealNotifications(notificationsRaw, workerId);
-    const notifications = filteredNotifications.slice(0, 5);
+    const notifications = filteredNotifications.slice(0, 25);
 
     // Fetch user details for profile completion
     const { data: user } = await supabaseAdmin.from('users').select('full_name, email, avatar_url').eq('id', workerId).single();

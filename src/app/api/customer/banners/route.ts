@@ -8,7 +8,8 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const platform = searchParams.get('platform')?.toLowerCase() || 'all';
-    const cacheKey = `customer:${platform}`;
+    const scope = searchParams.get('scope')?.toLowerCase() || 'dashboard';
+    const cacheKey = `customer:${platform}:${scope}`;
 
     // Ultra-fast in-memory cache check (<1ms)
     const cachedBanners = getBannerCache(cacheKey);
@@ -34,17 +35,29 @@ export async function GET(request: Request) {
       query = query.in('placement', [
         'HERO', 'PROMO', 'CUSTOMER', 'MOBILE_HERO', 'MOBILE_PROMO', 
         'CUSTOMER_HERO', 'CUSTOMER_PROMO', 'CUSTOMER_ALL', 
-        'ALL', 'ALL_MOBILE', 'UNIVERSAL', 'ALL_HERO', 'UNIVERSAL_HERO', 'ALL_PROMO', 'UNIVERSAL_PROMO',
         'CATALOG_HERO', 'GLOBAL_HERO'
       ]);
     } else if (platform === 'web') {
-      query = query.in('placement', [
-        'WEB', 'WEB_HERO', 'CUSTOMER_WEB', 'CUSTOMER_ALL', 
-        'ALL', 'ALL_WEB', 'UNIVERSAL'
-      ]);
+      if (scope === 'public') {
+        // Public landing page has no dynamic promotional banners
+        return NextResponse.json({ banners: [] });
+      } else if (scope === 'catalog') {
+        // Customer services catalog screen
+        query = query.in('placement', [
+          'CATALOG_HERO', 'CATALOG_MASTER', 'CUSTOMER_WEB', 'CUSTOMER_ALL', 
+          'WEB', 'WEB_HERO'
+        ]);
+      } else {
+        // Customer Web Dashboard (/customer/dashboard)
+        query = query.in('placement', [
+          'CUSTOMER_WEB', 'CUSTOMER_ALL', 'WEB', 'WEB_HERO'
+        ]);
+      }
     } else {
-      // Exclude worker-only placements by default
-      query = query.not('placement', 'ilike', 'WORKER_%');
+      // Exclude worker-only and public-only placements by default
+      query = query
+        .not('placement', 'ilike', 'WORKER_%')
+        .not('placement', 'ilike', 'PUBLIC_%');
     }
 
     // Run promo query concurrently if needed
