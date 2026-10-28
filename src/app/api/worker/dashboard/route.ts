@@ -70,7 +70,7 @@ export async function GET(request: Request) {
     const notifications = filteredNotifications.slice(0, 25);
 
     // Fetch user details for profile completion
-    const { data: user } = await supabaseAdmin.from('users').select('full_name, email, avatar_url').eq('id', workerId).single();
+    const { data: user } = await supabaseAdmin.from('users').select('full_name, email, phone, avatar_url').eq('id', workerId).single();
 
     // Calculate profile completion percentage
     let completedFields = 0;
@@ -203,9 +203,11 @@ export async function GET(request: Request) {
         full_name: user?.full_name || '',
         avatar_url: user?.avatar_url || null,
         email: user?.email || '',
+        phone: user?.phone || '',
       },
       worker: {
         id: workerId,
+        full_name: user?.full_name || '',
         rating: Number(worker.rating ?? 5.0),
       },
       stats: {

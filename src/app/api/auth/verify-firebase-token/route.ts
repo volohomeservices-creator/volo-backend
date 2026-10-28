@@ -9,7 +9,7 @@ import { createSession, logAuthEvent } from '@/lib/session';
 export async function POST(request: Request) {
   const cacheHeaders = { 'Cache-Control': 'no-store, max-age=0, must-revalidate' };
   try {
-    const { data: { idToken, role, ref_code, deviceFingerprint, deviceName }, errorResponse } = await validateBody(request, z.any());
+    const { data: { idToken, role, ref_code, deviceFingerprint, deviceName, first_name, last_name, email }, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
 
     if (!idToken || !role) {
@@ -54,6 +54,9 @@ export async function POST(request: Request) {
     let is_suspended = false;
     let existing_pin_hash = null;
 
+    const computedFullName = [first_name, last_name].filter(Boolean).join(' ').trim() || null;
+    const cleanEmail = email?.trim().toLowerCase() || null;
+
     if (!existingUser) {
       // User does not exist, insert user
       isNewUser = true;
@@ -63,6 +66,8 @@ export async function POST(request: Request) {
           firebase_uid,
           phone: formattedPhone,
           role,
+          full_name: computedFullName,
+          email: cleanEmail,
           phone_verified: true,
           is_active: true,
           is_suspended: false,
@@ -173,13 +178,17 @@ export async function POST(request: Request) {
       devices = data;
       devFetchErr = error;
     } else {
+      const updatePayload: Record<string, any> = {
+        firebase_uid,
+        phone_verified: true,
+        last_login_at: new Date().toISOString()
+      };
+      if (computedFullName && !existingUser.full_name) updatePayload.full_name = computedFullName;
+      if (cleanEmail && !existingUser.email) updatePayload.email = cleanEmail;
+
       const updatePromise = supabaseAdmin
         .from('users')
-        .update({
-          firebase_uid,
-          phone_verified: true,
-          last_login_at: new Date().toISOString()
-        })
+        .update(updatePayload)
         .eq('id', user_id);
 
       const devicesFetchPromise = supabaseAdmin
@@ -230,7 +239,7 @@ export async function POST(request: Request) {
     // 6. Calculate Redirection
     let redirectTo = '';
     if (role === 'customer') {
-      redirectTo = isNewUser || !current_full_name ? '/customer/onboarding' : '/customer/dashboard';
+      redirectTo = !current_full_name ? '/customer/onboarding' : '/customer/dashboard';
     } else {
       // Worker
       const { data: workerProfile } = await supabaseAdmin
@@ -267,6 +276,7 @@ export async function POST(request: Request) {
         id: user_id,
         role,
         full_name: current_full_name,
+        email: cleanEmail || existingUser?.email || null,
         phone: formattedPhone,
         avatar_url: existingUser?.avatar_url || null
       },

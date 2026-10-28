@@ -12,7 +12,7 @@ export async function GET(request: Request) {
     // Fetch user details for profile completeness (optimized select fields)
     const { data: user, error: userErr } = await supabaseAdmin
       .from('users')
-      .select('id, full_name, email, avatar_url, volo_coins')
+      .select('id, full_name, email, phone, avatar_url, volo_coins')
       .eq('id', customerId)
       .single();
 
@@ -93,9 +93,11 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       user: {
+        id: user.id,
         full_name: user.full_name,
         avatar_url: user.avatar_url,
         email: user.email,
+        phone: user.phone,
         volo_coins: user.volo_coins,
         has_address: !!(defaultAddr && defaultAddr.address)
       },
