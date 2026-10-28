@@ -227,11 +227,22 @@ export async function POST(request: Request) {
       redirectTo = !current_full_name ? '/customer/onboarding' : '/customer/dashboard';
     } else {
       // Worker
-      const { data: workerProfile } = await supabaseAdmin
+      let { data: workerProfile } = await supabaseAdmin
         .from('workers')
         .select('kyc_status')
         .eq('id', user_id)
-        .single();
+        .maybeSingle();
+
+      if (!workerProfile) {
+        await supabaseAdmin
+          .from('workers')
+          .insert({
+            id: user_id,
+            status: 'OFFLINE',
+            kyc_status: 'PENDING'
+          });
+        workerProfile = { kyc_status: 'PENDING' } as any;
+      }
 
       if (workerProfile?.kyc_status === 'REJECTED') {
         return NextResponse.json({ error: 'KYC_REJECTED' }, { status: 403 });

@@ -71,13 +71,29 @@ export async function GET(request: Request) {
       .single();
 
     // Fetch bank account details, dob, and worker_id_code from workers table
-    const { data: workerData, error: workerErr } = await supabaseAdmin
+    let { data: workerData } = await supabaseAdmin
       .from('workers')
       .select('bank_account_name, bank_account_number, bank_ifsc, dob, worker_id_code')
       .eq('id', workerId)
-      .single();
+      .maybeSingle();
 
-    if (workerErr) throw workerErr;
+    if (!workerData) {
+      await supabaseAdmin
+        .from('workers')
+        .insert({
+          id: workerId,
+          status: 'OFFLINE',
+          kyc_status: 'PENDING'
+        });
+
+      const { data: createdWorker } = await supabaseAdmin
+        .from('workers')
+        .select('bank_account_name, bank_account_number, bank_ifsc, dob, worker_id_code')
+        .eq('id', workerId)
+        .maybeSingle();
+
+      workerData = createdWorker;
+    }
 
     // Fetch bank account from worker_bank_accounts (settlement source of truth)
     let { data: primaryBank } = await supabaseAdmin
