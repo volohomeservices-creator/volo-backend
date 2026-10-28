@@ -12,6 +12,9 @@ export async function POST(request: NextRequest) {
       const accessToken = request.cookies.get('volo_session')?.value;
       if (accessToken) {
         const tokenHash = crypto.createHash('sha256').update(accessToken).digest('hex');
+        // Clear memory cache immediately
+        const { invalidateSessionMemoryCache } = await import('@/lib/session');
+        invalidateSessionMemoryCache(tokenHash);
         // Deactivate session in DB
         await supabaseAdmin
           .from('sessions')

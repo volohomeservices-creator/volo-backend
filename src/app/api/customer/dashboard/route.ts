@@ -9,34 +9,35 @@ export async function GET(request: Request) {
     const session = await requireRole(request, 'customer');
     const customerId = session.user_id;
 
-    // Fetch user details for profile completeness (optimized select fields)
-    const { data: user, error: userErr } = await supabaseAdmin
-      .from('users')
-      .select('id, full_name, email, phone, avatar_url, volo_coins')
-      .eq('id', customerId)
-      .single();
+    // Fetch user details, bookings, and reviews simultaneously in parallel
+    const [
+      { data: user, error: userErr },
+      { data: bookings, error: bookingsErr },
+      { data: reviews, error: reviewsErr }
+    ] = await Promise.all([
+      supabaseAdmin
+        .from('users')
+        .select('id, full_name, email, phone, avatar_url, volo_coins')
+        .eq('id', customerId)
+        .single(),
+      supabaseAdmin
+        .from('bookings')
+        .select('id, customer_id, worker_id, service_item_id, booking_type, payment_mode, status, address_line, lat, lng, scheduled_at, started_at, completed_at, total_amount, notes, otp, created_at, updated_at, service_items(name), workers(users(full_name), worker_live_locations_approx(latitude, longitude))')
+        .eq('customer_id', customerId)
+        .order('created_at', { ascending: false }),
+      supabaseAdmin
+        .from('reviews')
+        .select('id, booking_id, customer_id, worker_id, rating, comment:review_text, created_at, bookings(service_items(name))')
+        .eq('customer_id', customerId)
+        .order('created_at', { ascending: false })
+        .limit(5)
+    ]);
 
     if (userErr || !user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // Fetch all bookings for this customer (optimized select fields)
-    const { data: bookings, error: bookingsErr } = await supabaseAdmin
-      .from('bookings')
-      .select('id, customer_id, worker_id, service_item_id, booking_type, payment_mode, status, address_line, lat, lng, scheduled_at, started_at, completed_at, total_amount, notes, otp, created_at, updated_at, service_items(name), workers(users(full_name), worker_live_locations_approx(latitude, longitude))')
-      .eq('customer_id', customerId)
-      .order('created_at', { ascending: false });
-
     if (bookingsErr) throw bookingsErr;
-
-    // Fetch recent reviews by this customer (optimized select fields)
-    const { data: reviews, error: reviewsErr } = await supabaseAdmin
-      .from('reviews')
-      .select('id, booking_id, customer_id, worker_id, rating, comment:review_text, created_at, bookings(service_items(name))')
-      .eq('customer_id', customerId)
-      .order('created_at', { ascending: false })
-      .limit(5);
-
     if (reviewsErr) throw reviewsErr;
 
     // Calculate metrics

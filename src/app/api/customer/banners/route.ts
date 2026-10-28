@@ -18,7 +18,7 @@ export async function GET(request: Request) {
         { banners: cachedBanners },
         {
           headers: {
-            'Cache-Control': 'public, max-age=60, s-maxage=60, stale-while-revalidate=120',
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
             'X-Cache': 'HIT',
           },
         }
@@ -100,7 +100,7 @@ export async function GET(request: Request) {
       { banners: mergedBanners },
       {
         headers: {
-          'Cache-Control': 'public, max-age=60, s-maxage=60, stale-while-revalidate=120',
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
           'X-Cache': 'MISS',
         },
       }

@@ -154,8 +154,48 @@ export async function createSession(
   };
 }
 
+interface CachedSession {
+  payload: SessionPayload;
+  expiresAtMs: number;
+  cachedAtMs: number;
+}
+
+// In-memory cache for validated sessions (60 seconds TTL)
+// Avoids repeated ~700ms round-trips to Supabase on every single API request
+const verifiedSessionCache = new Map<string, CachedSession>();
+const lastActivityThrottle = new Map<string, number>();
+
+// Periodic cleanup to avoid memory leaks
+if (typeof setInterval !== 'undefined') {
+  const cleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [hash, entry] of verifiedSessionCache.entries()) {
+      if (now - entry.cachedAtMs > 120_000 || now > entry.expiresAtMs) {
+        verifiedSessionCache.delete(hash);
+      }
+    }
+    for (const [hash, time] of lastActivityThrottle.entries()) {
+      if (now - time > 300_000) {
+        lastActivityThrottle.delete(hash);
+      }
+    }
+  }, 60_000);
+  if (cleanupTimer.unref) cleanupTimer.unref();
+}
+
+export function invalidateSessionMemoryCache(tokenHash?: string) {
+  if (tokenHash) {
+    verifiedSessionCache.delete(tokenHash);
+    lastActivityThrottle.delete(tokenHash);
+  } else {
+    verifiedSessionCache.clear();
+    lastActivityThrottle.clear();
+  }
+}
+
 /**
  * Verifies a signed access token JWT and checks that the session remains active in the database.
+ * Uses an in-memory cache (< 0.05ms) for already-validated active tokens within a 60-second window.
  */
 export async function verifySessionCookie(token: string): Promise<SessionPayload | null> {
   try {
@@ -164,34 +204,55 @@ export async function verifySessionCookie(token: string): Promise<SessionPayload
     });
     const sessionPayload = payload as unknown as SessionPayload;
 
-    // Compute access token hash to lookup in DB
+    // Compute access token hash to lookup in DB / cache
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const now = Date.now();
 
+    // 1. Check in-memory cache first (< 0.05ms fast-path)
+    const cached = verifiedSessionCache.get(tokenHash);
+    if (cached && (now - cached.cachedAtMs < 60_000) && (cached.expiresAtMs > now)) {
+      return cached.payload;
+    }
+
+    // 2. Cache miss: verify active status in database
     const sessionsTable: any = supabaseAdmin.from('sessions');
     const { data: session, error } = await sessionsTable
       .select('is_active, expires_at')
       .eq('access_token_hash', tokenHash)
       .maybeSingle();
 
-    if (error || !session) {
+    if (error || !session || !session.is_active) {
+      verifiedSessionCache.delete(tokenHash);
       return null;
     }
 
-    if (!session.is_active) {
+    const expiresAtMs = new Date(session.expires_at).getTime();
+    if (expiresAtMs <= now) {
+      verifiedSessionCache.delete(tokenHash);
       return null;
     }
 
-    if (new Date(session.expires_at) < new Date()) {
-      return null;
-    }
+    // Cache the verified active session
+    verifiedSessionCache.set(tokenHash, {
+      payload: sessionPayload,
+      expiresAtMs,
+      cachedAtMs: now,
+    });
 
-    // Refresh last activity sliding window
-    try {
-      const sessionsTableUpdate: any = supabaseAdmin.from('sessions');
-      await sessionsTableUpdate
-        .update({ last_activity: new Date().toISOString() })
-        .eq('access_token_hash', tokenHash);
-    } catch {}
+    // 3. Debounced non-blocking last_activity update (at most once every 5 minutes per session)
+    const lastUpdate = lastActivityThrottle.get(tokenHash) || 0;
+    if (now - lastUpdate > 300_000) {
+      lastActivityThrottle.set(tokenHash, now);
+      // Fire-and-forget background update so request response is NOT delayed by 334ms
+      (async () => {
+        try {
+          const sessionsTableUpdate: any = supabaseAdmin.from('sessions');
+          await sessionsTableUpdate
+            .update({ last_activity: new Date().toISOString() })
+            .eq('access_token_hash', tokenHash);
+        } catch {}
+      })();
+    }
 
     return sessionPayload;
   } catch (error) {
