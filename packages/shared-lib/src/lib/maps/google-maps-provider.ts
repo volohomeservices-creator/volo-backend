@@ -103,6 +103,43 @@ export class GoogleMapsProvider implements IMapProvider {
     const apiKey = this.getApiKey();
     if (!apiKey) return [];
 
+    // 1. Try Places API (New) first
+    try {
+      const response = await axios.post(
+        'https://places.googleapis.com/v1/places:autocomplete',
+        {
+          input,
+          includedRegionCodes: ['in'],
+          languageCode: 'en',
+          ...(sessionToken ? { sessionToken } : {}),
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': apiKey,
+          },
+          timeout: 5000,
+        }
+      );
+
+      if (response.data?.suggestions && response.data.suggestions.length > 0) {
+        return response.data.suggestions
+          .filter((s: any) => s.placePrediction)
+          .map((s: any) => {
+            const p = s.placePrediction;
+            return {
+              placeId: p.placeId || (p.place ? p.place.replace('places/', '') : ''),
+              description: p.text?.text || '',
+              mainText: p.structuredFormat?.mainText?.text || '',
+              secondaryText: p.structuredFormat?.secondaryText?.text || '',
+            };
+          });
+      }
+    } catch {
+      // Gracefully proceed to legacy Places API
+    }
+
+    // 2. Fallback to Legacy Places API
     try {
       const response = await axios.get('https://maps.googleapis.com/maps/api/place/autocomplete/json', {
         params: {
@@ -110,6 +147,7 @@ export class GoogleMapsProvider implements IMapProvider {
           key: apiKey,
           ...(sessionToken ? { sessiontoken: sessionToken } : {}),
         },
+        timeout: 5000,
       });
 
       if (response.data.status === 'OK') {
@@ -120,7 +158,6 @@ export class GoogleMapsProvider implements IMapProvider {
           secondaryText: p.structured_formatting?.secondary_text || '',
         }));
       }
-      console.error('[GoogleMapsProvider] Autocomplete API error:', response.data.status, response.data.error_message || '');
       return [];
     } catch (error: any) {
       console.error('[GoogleMapsProvider] Autocomplete exception:', error.message || error);
@@ -132,14 +169,44 @@ export class GoogleMapsProvider implements IMapProvider {
     const apiKey = this.getApiKey();
     if (!apiKey) return null;
 
+    const cleanId = placeId.startsWith('places/') ? placeId.replace('places/', '') : placeId;
+
+    // 1. Try Places API (New) Place Details first
+    try {
+      const response = await axios.get(
+        `https://places.googleapis.com/v1/places/${encodeURIComponent(cleanId)}`,
+        {
+          headers: {
+            'X-Goog-Api-Key': apiKey,
+            'X-Goog-FieldMask': 'id,formattedAddress,location',
+          },
+          params: sessionToken ? { sessionToken } : {},
+          timeout: 5000,
+        }
+      );
+
+      if (response.data?.location) {
+        return {
+          lat: response.data.location.latitude,
+          lng: response.data.location.longitude,
+          formattedAddress: response.data.formattedAddress || '',
+          placeId: response.data.id || cleanId,
+        };
+      }
+    } catch {
+      // Gracefully proceed to legacy details
+    }
+
+    // 2. Fallback to Legacy Places Details API
     try {
       const response = await axios.get('https://maps.googleapis.com/maps/api/place/details/json', {
         params: {
-          place_id: placeId,
+          place_id: cleanId,
           fields: 'geometry,formatted_address,place_id',
           key: apiKey,
           ...(sessionToken ? { sessiontoken: sessionToken } : {}),
         },
+        timeout: 5000,
       });
 
       if (response.data.status === 'OK' && response.data.result) {
@@ -151,7 +218,6 @@ export class GoogleMapsProvider implements IMapProvider {
           placeId: result.place_id,
         };
       }
-      console.error('[GoogleMapsProvider] Place Details API error:', response.data.status, response.data.error_message || '');
       return null;
     } catch (error: any) {
       console.error('[GoogleMapsProvider] Place Details exception:', error.message || error);

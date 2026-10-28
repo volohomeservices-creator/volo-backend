@@ -2003,9 +2003,9 @@ export async function POST(
       if (error) throw error;
 
       if (action === 'APPROVE') {
-        const { createWallet, creditWorkerKycWelcomeBonus } = await import('@/lib/wallet-engine');
+        const { createWallet } = await import('@/lib/wallet-engine');
         await createWallet(workerId);
-        await creditWorkerKycWelcomeBonus(workerId);
+        // Note: Sign-in bonus deposits to Captain wallet after completing required orders configured in Admin Referral Rules
       }
 
       // Update overall kyc checklist and remarks in worker_kyc table
@@ -2154,9 +2154,9 @@ export async function POST(
 
         if (updateErr) throw updateErr;
 
-        const { createWallet, creditWorkerKycWelcomeBonus } = await import('@/lib/wallet-engine');
+        const { createWallet } = await import('@/lib/wallet-engine');
         await createWallet(workerId);
-        await creditWorkerKycWelcomeBonus(workerId);
+        // Note: Sign-in bonus deposits to Captain wallet after completing required orders configured in Admin Referral Rules
 
         await logAuditAction({
           admin_id: session.user_id,

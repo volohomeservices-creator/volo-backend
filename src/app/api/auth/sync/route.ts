@@ -172,12 +172,6 @@ export async function POST(request: Request) {
                 reward_amount: referrerReward,
                 referee_reward_amount: refereeReward,
               });
-
-            // If customer signup, credit welcome bonus immediately
-            if (refCodeRow.role === 'customer' && refereeReward > 0) {
-              const { creditCustomerReferralWelcomeBonus } = await import('@/lib/wallet-engine');
-              await creditCustomerReferralWelcomeBonus(user_id);
-            }
           }
         } catch (refErr) {
           // Non-fatal: log but don't block signup

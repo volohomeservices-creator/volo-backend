@@ -8,6 +8,7 @@ import { dispatchNotification } from '@/lib/notification-dispatcher';
 import { createOnlinePayment } from '@/lib/payment-service';
 import { getBookingSlug } from '@/lib/booking-slug';
 import { calculateCustomerCharges } from '@/lib/pricing-engine';
+import { isLocationInWarangal } from '@/lib/warangal-geofence';
 
 export const dynamic = 'force-dynamic';
 
@@ -67,6 +68,19 @@ export async function POST(request: Request) {
 
     if (!service_item_id || !address || !latitude || !longitude) {
       return NextResponse.json({ error: 'Missing required booking fields.' }, { status: 400 });
+    }
+
+    // Verify service delivery location is strictly within Warangal operational zone
+    const bookingLat = Number(latitude);
+    const bookingLng = Number(longitude);
+    if (!isLocationInWarangal(bookingLat, bookingLng)) {
+      return NextResponse.json(
+        {
+          error: 'OUT_OF_SERVICE_AREA',
+          message: 'VOLO Home Services is currently operational exclusively in Warangal district. We will be coming to your location soon!'
+        },
+        { status: 422 }
+      );
     }
 
     // 1. Fetch service item to get base price
