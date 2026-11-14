@@ -36,7 +36,24 @@ export async function GET(request: Request) {
     }
 
     if (session.role === 'worker' && workerRes?.data) {
-      user.kyc_status = workerRes.data.kyc_status || 'PENDING';
+      let kycStatus = workerRes.data.kyc_status || 'PENDING';
+      // Auto-heal kyc_status if worker_kyc table is approved
+      if (kycStatus !== 'APPROVED') {
+        const { data: kycRow } = await supabaseAdmin
+          .from('worker_kyc')
+          .select('overall_status')
+          .eq('worker_id', session.user_id)
+          .maybeSingle();
+
+        if (kycRow?.overall_status === 'APPROVED') {
+          await supabaseAdmin
+            .from('workers')
+            .update({ kyc_status: 'APPROVED' })
+            .eq('id', session.user_id);
+          kycStatus = 'APPROVED';
+        }
+      }
+      user.kyc_status = kycStatus;
       user.worker_status = workerRes.data.status || 'OFFLINE';
     }
 

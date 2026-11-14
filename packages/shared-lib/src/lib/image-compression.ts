@@ -6,6 +6,9 @@ export async function compressKycImage(file: File, documentType: string): Promis
     'AADHAAR_BACK',
     'PAN_CARD',
     'EXPERIENCE_CERTIFICATE',
+    'EXPERIENCE_CERTIFICATE_1',
+    'EXPERIENCE_CERTIFICATE_2',
+    'EXPERIENCE_CERTIFICATE_3',
     'CERTIFICATE',
     'WORK_PROOF',
     'ATTACHMENT'

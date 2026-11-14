@@ -10,6 +10,7 @@ import { dispatchNotification, dispatchBulkNotifications } from '@/lib/notificat
 import { memoryCache } from '@/lib/cache';
 import { parseBookingIdentifier, getUuidRangeForShortId } from '@/lib/booking-slug';
 import { toTitleCase } from '@/lib/title-case';
+import { sendKycApprovedEmail, sendKycRejectedEmail } from '@/lib/email-service';
 
 
 // Helper to calculate date boundaries
@@ -383,9 +384,13 @@ export async function GET(
             PAN_CARD: 'pan.webp',
             SELFIE_VERIFICATION: 'selfie.webp',
             EXPERIENCE_CERTIFICATE: 'certificate.webp',
+            EXPERIENCE_CERTIFICATE_1: 'certificate_1.webp',
+            EXPERIENCE_CERTIFICATE_2: 'certificate_2.webp',
+            EXPERIENCE_CERTIFICATE_3: 'certificate_3.webp',
             CERTIFICATE: 'certificate.webp'
           };
-          path = doc.file_url || `worker_${workerId}/${fileMap[doc.document_type] || 'certificate.webp'}`;
+          const fname = fileMap[doc.document_type] || (doc.document_type.startsWith('EXPERIENCE_CERTIFICATE') ? `${doc.document_type.toLowerCase()}.webp` : 'certificate.webp');
+          path = doc.file_url || `worker_${workerId}/${fname}`;
         }
 
         const { data } = await supabaseAdmin.storage
@@ -423,7 +428,15 @@ export async function GET(
         aadhar_back_url: getSignedUrlForType('AADHAAR_BACK') || workerData.aadhar_back_url,
         pan_url: getSignedUrlForType('PAN_CARD') || workerData.pan_url,
         selfie_url: getSignedUrlForType('SELFIE_VERIFICATION') || workerData.selfie_url,
-        certificate_url: getSignedUrlForType('EXPERIENCE_CERTIFICATE') || getSignedUrlForType('CERTIFICATE') || workerData.certificate_url,
+        certificate_url: getSignedUrlForType('EXPERIENCE_CERTIFICATE_1') || getSignedUrlForType('EXPERIENCE_CERTIFICATE') || getSignedUrlForType('CERTIFICATE') || workerData.certificate_url,
+        certificate_1_url: getSignedUrlForType('EXPERIENCE_CERTIFICATE_1') || getSignedUrlForType('EXPERIENCE_CERTIFICATE') || getSignedUrlForType('CERTIFICATE') || workerData.certificate_url,
+        certificate_2_url: getSignedUrlForType('EXPERIENCE_CERTIFICATE_2'),
+        certificate_3_url: getSignedUrlForType('EXPERIENCE_CERTIFICATE_3'),
+        certificate_urls: [
+          getSignedUrlForType('EXPERIENCE_CERTIFICATE_1') || getSignedUrlForType('EXPERIENCE_CERTIFICATE') || getSignedUrlForType('CERTIFICATE') || workerData.certificate_url,
+          getSignedUrlForType('EXPERIENCE_CERTIFICATE_2'),
+          getSignedUrlForType('EXPERIENCE_CERTIFICATE_3'),
+        ].filter(Boolean),
         experience_years: workerData.experience_years || 0,
         bank_account_name: workerData.bank_account_name,
         bank_account_number: maskBankAcc(workerData.bank_account_number),
@@ -473,9 +486,15 @@ export async function GET(
             AADHAAR_FRONT: 'aadhaar-front.webp',
             AADHAAR_BACK: 'aadhaar-back.webp',
             PAN_CARD: 'pan.webp',
-            SELFIE_VERIFICATION: 'selfie.webp'
+            SELFIE_VERIFICATION: 'selfie.webp',
+            EXPERIENCE_CERTIFICATE: 'certificate.webp',
+            EXPERIENCE_CERTIFICATE_1: 'certificate_1.webp',
+            EXPERIENCE_CERTIFICATE_2: 'certificate_2.webp',
+            EXPERIENCE_CERTIFICATE_3: 'certificate_3.webp',
+            CERTIFICATE: 'certificate.webp'
           };
-          path = doc.file_url || `worker_${workerId}/${fileMap[doc.document_type]}`;
+          const fname = fileMap[doc.document_type] || (doc.document_type.startsWith('EXPERIENCE_CERTIFICATE') ? `${doc.document_type.toLowerCase()}.webp` : 'certificate.webp');
+          path = doc.file_url || `worker_${workerId}/${fname}`;
         }
 
         const { data, error } = await supabaseAdmin.storage
@@ -2040,7 +2059,13 @@ export async function POST(
           aadhaar: ['AADHAAR_FRONT', 'AADHAAR_BACK'],
           pan: ['PAN_CARD'],
           selfie: ['SELFIE_VERIFICATION'],
-          certificate: ['EXPERIENCE_CERTIFICATE', 'CERTIFICATE']
+          certificate: [
+            'EXPERIENCE_CERTIFICATE',
+            'CERTIFICATE',
+            'EXPERIENCE_CERTIFICATE_1',
+            'EXPERIENCE_CERTIFICATE_2',
+            'EXPERIENCE_CERTIFICATE_3'
+          ]
         };
 
         for (const [field, types] of Object.entries(docTypes)) {
@@ -2060,7 +2085,8 @@ export async function POST(
           .update({
             aadhaar_status: 'APPROVED',
             pan_status: 'APPROVED',
-            selfie_status: 'APPROVED'
+            selfie_status: 'APPROVED',
+            certificate_status: 'APPROVED'
           })
           .eq('worker_id', workerId);
 
@@ -2079,6 +2105,36 @@ export async function POST(
           ? 'Congratulations! Your profile KYC registration is approved.'
           : `KYC Review Update. Remarks: ${reason || 'Document verification updated.'}`
       });
+
+      // Dispatch email notification to worker
+      try {
+        const { data: workerUser } = await supabaseAdmin
+          .from('workers')
+          .select('id, users(email, full_name)')
+          .eq('id', workerId)
+          .single();
+
+        const workerEmail = (workerUser as any)?.users?.email;
+        const workerName = (workerUser as any)?.users?.full_name || 'Captain';
+
+        if (workerEmail) {
+          if (action === 'APPROVE') {
+            await sendKycApprovedEmail({
+              workerEmail,
+              workerName,
+              workerId,
+            }).catch(e => console.error('[Email] KYC Approve error:', e?.message));
+          } else {
+            await sendKycRejectedEmail({
+              workerEmail,
+              workerName,
+              remarks: reason || 'Document verification updated.',
+            }).catch(e => console.error('[Email] KYC Reject error:', e?.message));
+          }
+        }
+      } catch (emailErr) {
+        console.error('Failed to dispatch KYC decision email:', emailErr);
+      }
 
       // Write Audit Log
       await logAuditAction({
@@ -2123,6 +2179,7 @@ export async function POST(
             aadhaar_status: 'APPROVED',
             pan_status: 'APPROVED',
             selfie_status: 'APPROVED',
+            certificate_status: 'APPROVED',
             reviewed_by: session.user_id,
             reviewed_at: new Date().toISOString()
           })

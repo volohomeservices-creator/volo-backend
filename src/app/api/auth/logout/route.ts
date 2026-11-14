@@ -9,7 +9,14 @@ export async function POST(request: NextRequest) {
     const session = await getSessionFromRequest(request);
 
     if (session) {
-      const accessToken = request.cookies.get('volo_session')?.value;
+      let accessToken = request.cookies.get('volo_session')?.value;
+      if (!accessToken) {
+        const authHeader = request.headers.get('authorization');
+        if (authHeader?.startsWith('Bearer ')) {
+          accessToken = authHeader.substring(7).trim();
+        }
+      }
+
       if (accessToken) {
         const tokenHash = crypto.createHash('sha256').update(accessToken).digest('hex');
         // Clear memory cache immediately

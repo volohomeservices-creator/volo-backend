@@ -5,6 +5,7 @@ import { requireRole } from '@/lib/auth';
 import { supabaseAdmin } from '@/lib/supabase-server';
 import { ensureBucketsExist } from '@/lib/storage-setup';
 import { encryptBankAccount, decryptBankAccount } from '@/lib/settlement-engine';
+import { sendKycSubmissionAdminEmail, sendKycSubmissionWorkerAck } from '@/lib/email-service';
 
 export async function GET(request: Request) {
   const cacheHeaders = { 'Cache-Control': 'no-store, max-age=0, must-revalidate' };
@@ -39,9 +40,13 @@ export async function GET(request: Request) {
           PAN_CARD: 'pan.webp',
           SELFIE_VERIFICATION: 'selfie.webp',
           EXPERIENCE_CERTIFICATE: 'certificate.webp',
+          EXPERIENCE_CERTIFICATE_1: 'certificate_1.webp',
+          EXPERIENCE_CERTIFICATE_2: 'certificate_2.webp',
+          EXPERIENCE_CERTIFICATE_3: 'certificate_3.webp',
           CERTIFICATE: 'certificate.webp'
         };
-        path = `worker_${workerId}/${fileMap[doc.document_type] || 'certificate.webp'}`;
+        const fname = fileMap[doc.document_type] || (doc.document_type.startsWith('EXPERIENCE_CERTIFICATE') ? `${doc.document_type.toLowerCase()}.webp` : 'certificate.webp');
+        path = doc.file_url || `worker_${workerId}/${fname}`;
       }
 
       const { data } = await supabaseAdmin.storage
@@ -498,6 +503,68 @@ export async function POST(request: Request) {
         }
       }
 
+      // Update overall kyc status to PENDING on submission
+      await supabaseAdmin
+        .from('worker_kyc')
+        .update({
+          overall_status: 'PENDING',
+          submitted_at: new Date().toISOString(),
+          remarks: null
+        })
+        .eq('worker_id', workerId);
+
+      // Fetch worker user details
+      const { data: workerUser } = await supabaseAdmin
+        .from('users')
+        .select('full_name, email, phone')
+        .eq('id', workerId)
+        .single();
+
+      const workerDisplayName = rawHolder || full_name || workerUser?.full_name || 'Captain';
+      const primaryTrade = Array.isArray(skills) && skills[0] ? String(skills[0]).trim() : 'General Trade';
+
+      try {
+        const { data: admins } = await supabaseAdmin
+          .from('users')
+          .select('id, email')
+          .eq('role', 'admin');
+
+        if (admins && admins.length > 0) {
+          const adminNotifs = admins.map((adm) => ({
+            user_id: adm.id,
+            type: 'NEW_KYC_SUBMISSION',
+            title: 'New Captain KYC Submitted',
+            body: `Captain ${workerDisplayName} has submitted documents & details for ${primaryTrade} verification.`,
+            data: {
+              workerId,
+              workerName: workerDisplayName,
+              trade: primaryTrade,
+              url: `/admin/captains/view?id=${workerId}`
+            }
+          }));
+          await supabaseAdmin.from('notifications').insert(adminNotifs);
+        }
+
+        // Send Email Alert to Admin and Acknowledgment to Worker
+
+        await sendKycSubmissionAdminEmail({
+          workerId,
+          workerName: workerDisplayName,
+          workerPhone: workerUser?.phone || '',
+          workerEmail: workerUser?.email,
+          trade: primaryTrade,
+        }).catch((err) => console.error('[KYC Submit] Admin email error:', err?.message || err));
+
+        if (workerUser?.email) {
+          await sendKycSubmissionWorkerAck({
+            workerEmail: workerUser.email,
+            workerName: workerDisplayName,
+          }).catch((err) => console.error('[KYC Submit] Worker ack email error:', err?.message || err));
+        }
+      } catch (notifErr) {
+        console.error('[KYC Submit] Admin notification error:', notifErr);
+      }
+
       return NextResponse.json({ success: true, message: 'Bank and personal details updated.' });
     }
 
@@ -513,6 +580,9 @@ export async function POST(request: Request) {
       'PROFILE_PHOTO',
       'SELFIE_VERIFICATION',
       'EXPERIENCE_CERTIFICATE',
+      'EXPERIENCE_CERTIFICATE_1',
+      'EXPERIENCE_CERTIFICATE_2',
+      'EXPERIENCE_CERTIFICATE_3',
       'CERTIFICATE'
     ];
     const requiredTypes = [
@@ -550,7 +620,7 @@ export async function POST(request: Request) {
     if (document_type === 'AADHAAR_BACK') syncData.aadhar_back_url = file_url;
     if (document_type === 'PAN_CARD') syncData.pan_url = file_url;
     if (document_type === 'SELFIE_VERIFICATION') syncData.selfie_url = file_url;
-    if (document_type === 'EXPERIENCE_CERTIFICATE' || document_type === 'CERTIFICATE') {
+    if (document_type.startsWith('EXPERIENCE_CERTIFICATE') || document_type === 'CERTIFICATE') {
       syncData.certificate_url = file_url;
     }
 
@@ -565,7 +635,6 @@ export async function POST(request: Request) {
     // Update matching fields in worker_kyc status tracker
     let kycStatusUpdate: any = {};
     if (document_type === 'AADHAAR_FRONT' || document_type === 'AADHAAR_BACK') {
-      // Aadhaar is approved when both front and back are approved
       kycStatusUpdate.aadhaar_status = 'PENDING';
     }
     if (document_type === 'PAN_CARD') {
@@ -574,7 +643,7 @@ export async function POST(request: Request) {
     if (document_type === 'SELFIE_VERIFICATION') {
       kycStatusUpdate.selfie_status = 'PENDING';
     }
-    if (document_type === 'EXPERIENCE_CERTIFICATE' || document_type === 'CERTIFICATE') {
+    if (document_type.startsWith('EXPERIENCE_CERTIFICATE') || document_type === 'CERTIFICATE') {
       kycStatusUpdate.certificate_status = 'PENDING';
     }
 
@@ -586,15 +655,21 @@ export async function POST(request: Request) {
 
     const uploadedTypes = currentDocs?.map(d => d.document_type) || [];
     
-    // Check if all requirements including experience/certificate are met
+    // Check if all requirements including at least 1 experience certificate are met
+    const hasCertificate = uploadedTypes.some(t => 
+      t === 'EXPERIENCE_CERTIFICATE' || 
+      t === 'EXPERIENCE_CERTIFICATE_1' || 
+      t === 'EXPERIENCE_CERTIFICATE_2' || 
+      t === 'EXPERIENCE_CERTIFICATE_3' || 
+      t === 'CERTIFICATE'
+    ) || (
+      document_type.startsWith('EXPERIENCE_CERTIFICATE') || 
+      document_type === 'CERTIFICATE'
+    );
+
     const hasAllDocs = requiredTypes.every(type => {
       if (type === 'EXPERIENCE_CERTIFICATE') {
-        return (
-          uploadedTypes.includes('EXPERIENCE_CERTIFICATE') ||
-          uploadedTypes.includes('CERTIFICATE') ||
-          document_type === 'EXPERIENCE_CERTIFICATE' ||
-          document_type === 'CERTIFICATE'
-        );
+        return hasCertificate;
       }
       return uploadedTypes.includes(type) || type === document_type;
     });

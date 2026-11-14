@@ -30,10 +30,25 @@ export async function PATCH(request: Request) {
 
     // 2. Enforce restriction: must be KYC APPROVED to go ONLINE
     if (status === 'ONLINE' && worker.kyc_status !== 'APPROVED') {
-      return NextResponse.json(
-        { error: 'KYC approval is required before going online.' },
-        { status: 403 }
-      );
+      // Check if worker_kyc is approved (e.g. newly approved by admin) and auto-heal workers.kyc_status
+      const { data: kycRow } = await supabaseAdmin
+        .from('worker_kyc')
+        .select('overall_status')
+        .eq('worker_id', workerId)
+        .maybeSingle();
+
+      if (kycRow?.overall_status === 'APPROVED') {
+        await supabaseAdmin
+          .from('workers')
+          .update({ kyc_status: 'APPROVED' })
+          .eq('id', workerId);
+        worker.kyc_status = 'APPROVED';
+      } else {
+        return NextResponse.json(
+          { error: 'KYC approval is required before going online.' },
+          { status: 403 }
+        );
+      }
     }
 
     let lat = (latitude !== undefined && latitude !== null) ? Number(latitude) : null;

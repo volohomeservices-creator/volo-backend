@@ -45,7 +45,14 @@ export async function dispatchNotification(payload: DispatchNotificationPayload)
       title: payload.title,
       body: payload.body,
       // Convert nested data to flat string map for FCM
-      data: payload.data ? { payload: JSON.stringify(payload.data) } : undefined
+      data: {
+        userId: payload.userId,
+        type: payload.type,
+        ...(payload.data?.booking_id ? { bookingId: String(payload.data.booking_id) } : {}),
+        ...(payload.data?.bookingId ? { bookingId: String(payload.data.bookingId) } : {}),
+        ...(payload.data?.role ? { role: String(payload.data.role) } : {}),
+        ...(payload.data ? { payload: JSON.stringify(payload.data) } : {})
+      }
     });
 
     return true;
@@ -84,7 +91,13 @@ export async function dispatchBulkNotifications(payload: DispatchBulkNotificatio
       userIds: payload.userIds,
       title: payload.title,
       body: payload.body,
-      data: payload.data ? { payload: JSON.stringify(payload.data) } : undefined
+      data: {
+        type: payload.type,
+        ...(payload.data?.booking_id ? { bookingId: String(payload.data.booking_id) } : {}),
+        ...(payload.data?.bookingId ? { bookingId: String(payload.data.bookingId) } : {}),
+        ...(payload.data?.role ? { role: String(payload.data.role) } : {}),
+        ...(payload.data ? { payload: JSON.stringify(payload.data) } : {})
+      }
     });
 
     return true;

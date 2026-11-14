@@ -59,6 +59,23 @@ export async function GET(request: Request) {
     ]);
 
     const worker = workerRes.data;
+
+    // Auto-heal/sync kyc_status if worker_kyc was approved
+    if (worker.kyc_status !== 'APPROVED') {
+      const { data: kycRow } = await supabaseAdmin
+        .from('worker_kyc')
+        .select('overall_status')
+        .eq('worker_id', workerId)
+        .maybeSingle();
+
+      if (kycRow?.overall_status === 'APPROVED') {
+        await supabaseAdmin
+          .from('workers')
+          .update({ kyc_status: 'APPROVED' })
+          .eq('id', workerId);
+        worker.kyc_status = 'APPROVED';
+      }
+    }
     const profile = (profileRes.data || {}) as any;
     const bookings = allBookingsRes.data || [];
     const totalBookingsCount = bookings.length;
