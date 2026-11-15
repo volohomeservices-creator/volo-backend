@@ -97,6 +97,7 @@ export const bookingCreateSchema = z.object({
   scheduled_at: z.string().optional().nullable(),
   notes: z.string().max(500).optional().nullable(),
   promo_code: z.string().max(50).optional().nullable(),
+  item_count: z.number().or(z.string().transform(Number)).optional().default(1),
   payment_mode: z.string().optional().default('COD')
 });
 

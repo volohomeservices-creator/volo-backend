@@ -94,11 +94,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Service item not found.' }, { status: 404 });
     }
 
+    const itemCount = Number(body.item_count || 1);
+
     // 2. Calculate authoritative pricing breakdown via central Pricing Engine
     const pricingBreakdown = await calculateCustomerCharges({
       serviceAmount: Number(item.base_price),
       serviceId: item.id,
       categoryId: item.category_id,
+      itemCount,
     });
 
     const basePrice = pricingBreakdown.serviceAmount;
