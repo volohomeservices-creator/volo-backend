@@ -59,6 +59,23 @@ export async function GET(request: Request) {
     ]);
 
     const worker = workerRes.data;
+
+    // Auto-heal/sync kyc_status if worker_kyc was approved
+    if (worker.kyc_status !== 'APPROVED') {
+      const { data: kycRow } = await supabaseAdmin
+        .from('worker_kyc')
+        .select('overall_status')
+        .eq('worker_id', workerId)
+        .maybeSingle();
+
+      if (kycRow?.overall_status === 'APPROVED') {
+        await supabaseAdmin
+          .from('workers')
+          .update({ kyc_status: 'APPROVED' })
+          .eq('id', workerId);
+        worker.kyc_status = 'APPROVED';
+      }
+    }
     const profile = (profileRes.data || {}) as any;
     const bookings = allBookingsRes.data || [];
     const totalBookingsCount = bookings.length;
@@ -67,10 +84,10 @@ export async function GET(request: Request) {
     const inProgressJobsCount = bookings.filter(b => ['IN_PROGRESS', 'ON_THE_WAY', 'ARRIVED', 'WORKER_ACCEPTED'].includes(b.status)).length;
     const notificationsRaw = notificationsRes.data || [];
     const filteredNotifications = await filterRealNotifications(notificationsRaw, workerId);
-    const notifications = filteredNotifications.slice(0, 5);
+    const notifications = filteredNotifications.slice(0, 25);
 
     // Fetch user details for profile completion
-    const { data: user } = await supabaseAdmin.from('users').select('full_name, email, avatar_url').eq('id', workerId).single();
+    const { data: user } = await supabaseAdmin.from('users').select('full_name, email, phone, avatar_url').eq('id', workerId).single();
 
     // Calculate profile completion percentage
     let completedFields = 0;
@@ -203,9 +220,11 @@ export async function GET(request: Request) {
         full_name: user?.full_name || '',
         avatar_url: user?.avatar_url || null,
         email: user?.email || '',
+        phone: user?.phone || '',
       },
       worker: {
         id: workerId,
+        full_name: user?.full_name || '',
         rating: Number(worker.rating ?? 5.0),
       },
       stats: {

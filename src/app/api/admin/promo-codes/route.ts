@@ -56,7 +56,7 @@ export async function POST(request: Request) {
         min_order_amount: Number(min_order_amount || 0),
         max_discount_amount: max_discount_amount ? Number(max_discount_amount) : null,
         max_uses: max_uses ? Number(max_uses) : null,
-        applicable_role: applicable_role || 'customer',
+        applicable_role: 'customer',
         valid_from: valid_from || new Date().toISOString(),
         expires_at: expires_at || null,
         active: true,

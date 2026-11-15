@@ -9,6 +9,8 @@ import { AuditAction } from '@/types';
 import { dispatchNotification, dispatchBulkNotifications } from '@/lib/notification-dispatcher';
 import { memoryCache } from '@/lib/cache';
 import { parseBookingIdentifier, getUuidRangeForShortId } from '@/lib/booking-slug';
+import { toTitleCase } from '@/lib/title-case';
+import { sendKycApprovedEmail, sendKycRejectedEmail } from '@/lib/email-service';
 
 
 // Helper to calculate date boundaries
@@ -61,10 +63,16 @@ async function getWorkerKycSync(workerId: string, adminStatus: string) {
       reason = allDocsApproved
         ? `The worker portal shows KYC approved${kycRow?.reviewed_at ? ` (reviewed ${new Date(kycRow.reviewed_at).toLocaleDateString('en-IN')})` : ''} and all ${REQUIRED_KYC_DOCUMENTS.length} documents are approved, but the account status used for going online and job dispatch is still ${adminStatus}. The worker sees "Approved" but cannot go online.`
         : `The worker portal shows KYC approved, but only ${approvedDocs} of ${REQUIRED_KYC_DOCUMENTS.length} documents are approved and the account status is ${adminStatus}. Review the documents before approving.`;
+    } else if (adminStatus === 'APPROVED' && portalStatus !== 'APPROVED') {
+      reason = `Account is marked Approved for job dispatch, but worker portal documents show ${portalStatus}. Syncing will update portal documents to Approved.`;
     } else {
       reason = `The worker portal shows KYC ${portalStatus}, but the account status is ${adminStatus}.`;
     }
   }
+
+  const canSync =
+    (portalStatus === 'APPROVED' && adminStatus !== 'APPROVED' && allDocsApproved) ||
+    (adminStatus === 'APPROVED' && portalStatus !== 'APPROVED');
 
   return {
     admin_status: adminStatus,
@@ -73,7 +81,7 @@ async function getWorkerKycSync(workerId: string, adminStatus: string) {
     documents_approved: approvedDocs,
     documents_required: REQUIRED_KYC_DOCUMENTS.length,
     in_sync: inSync,
-    can_sync: portalStatus === 'APPROVED' && adminStatus !== 'APPROVED' && allDocsApproved,
+    can_sync: canSync,
     reason,
   };
 }
@@ -376,9 +384,13 @@ export async function GET(
             PAN_CARD: 'pan.webp',
             SELFIE_VERIFICATION: 'selfie.webp',
             EXPERIENCE_CERTIFICATE: 'certificate.webp',
+            EXPERIENCE_CERTIFICATE_1: 'certificate_1.webp',
+            EXPERIENCE_CERTIFICATE_2: 'certificate_2.webp',
+            EXPERIENCE_CERTIFICATE_3: 'certificate_3.webp',
             CERTIFICATE: 'certificate.webp'
           };
-          path = doc.file_url || `worker_${workerId}/${fileMap[doc.document_type] || 'certificate.webp'}`;
+          const fname = fileMap[doc.document_type] || (doc.document_type.startsWith('EXPERIENCE_CERTIFICATE') ? `${doc.document_type.toLowerCase()}.webp` : 'certificate.webp');
+          path = doc.file_url || `worker_${workerId}/${fname}`;
         }
 
         const { data } = await supabaseAdmin.storage
@@ -416,7 +428,15 @@ export async function GET(
         aadhar_back_url: getSignedUrlForType('AADHAAR_BACK') || workerData.aadhar_back_url,
         pan_url: getSignedUrlForType('PAN_CARD') || workerData.pan_url,
         selfie_url: getSignedUrlForType('SELFIE_VERIFICATION') || workerData.selfie_url,
-        certificate_url: getSignedUrlForType('EXPERIENCE_CERTIFICATE') || getSignedUrlForType('CERTIFICATE') || workerData.certificate_url,
+        certificate_url: getSignedUrlForType('EXPERIENCE_CERTIFICATE_1') || getSignedUrlForType('EXPERIENCE_CERTIFICATE') || getSignedUrlForType('CERTIFICATE') || workerData.certificate_url,
+        certificate_1_url: getSignedUrlForType('EXPERIENCE_CERTIFICATE_1') || getSignedUrlForType('EXPERIENCE_CERTIFICATE') || getSignedUrlForType('CERTIFICATE') || workerData.certificate_url,
+        certificate_2_url: getSignedUrlForType('EXPERIENCE_CERTIFICATE_2'),
+        certificate_3_url: getSignedUrlForType('EXPERIENCE_CERTIFICATE_3'),
+        certificate_urls: [
+          getSignedUrlForType('EXPERIENCE_CERTIFICATE_1') || getSignedUrlForType('EXPERIENCE_CERTIFICATE') || getSignedUrlForType('CERTIFICATE') || workerData.certificate_url,
+          getSignedUrlForType('EXPERIENCE_CERTIFICATE_2'),
+          getSignedUrlForType('EXPERIENCE_CERTIFICATE_3'),
+        ].filter(Boolean),
         experience_years: workerData.experience_years || 0,
         bank_account_name: workerData.bank_account_name,
         bank_account_number: maskBankAcc(workerData.bank_account_number),
@@ -466,9 +486,15 @@ export async function GET(
             AADHAAR_FRONT: 'aadhaar-front.webp',
             AADHAAR_BACK: 'aadhaar-back.webp',
             PAN_CARD: 'pan.webp',
-            SELFIE_VERIFICATION: 'selfie.webp'
+            SELFIE_VERIFICATION: 'selfie.webp',
+            EXPERIENCE_CERTIFICATE: 'certificate.webp',
+            EXPERIENCE_CERTIFICATE_1: 'certificate_1.webp',
+            EXPERIENCE_CERTIFICATE_2: 'certificate_2.webp',
+            EXPERIENCE_CERTIFICATE_3: 'certificate_3.webp',
+            CERTIFICATE: 'certificate.webp'
           };
-          path = doc.file_url || `worker_${workerId}/${fileMap[doc.document_type]}`;
+          const fname = fileMap[doc.document_type] || (doc.document_type.startsWith('EXPERIENCE_CERTIFICATE') ? `${doc.document_type.toLowerCase()}.webp` : 'certificate.webp');
+          path = doc.file_url || `worker_${workerId}/${fname}`;
         }
 
         const { data, error } = await supabaseAdmin.storage
@@ -608,7 +634,7 @@ export async function GET(
             admin_notes,
             processed_at,
             created_at,
-            users (
+            users:users!account_deletion_requests_user_id_fkey (
               full_name,
               email,
               is_active
@@ -617,6 +643,7 @@ export async function GET(
           .order('created_at', { ascending: false });
 
         if (error) {
+          console.error('[Admin Deletion Requests] DB error:', error);
           return NextResponse.json({ requests: [], total: 0 });
         }
 
@@ -654,7 +681,51 @@ export async function GET(
       if (dateTo) query = query.lte('created_at', dateTo);
 
       if (search) {
-        query = query.or(`full_name.ilike.%${search}%`, { foreignTable: 'users' });
+        const cleanSearch = search.trim().replace(/^#/, '');
+
+        // 1. Find matching customer users by full_name or phone
+        const { data: matchedUsers } = await supabaseAdmin
+          .from('users')
+          .select('id')
+          .or(`full_name.ilike.%${cleanSearch}%,phone.ilike.%${cleanSearch}%`)
+          .limit(100);
+
+        const matchedCustomerIds = (matchedUsers || []).map((u: any) => u.id);
+
+        // 2. Check if cleanSearch matches booking ID
+        const isHexSearch = /^[0-9a-fA-F-]{4,36}$/.test(cleanSearch);
+        let matchedBookingIds: string[] = [];
+
+        if (isHexSearch) {
+          if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanSearch)) {
+            matchedBookingIds = [cleanSearch.toLowerCase()];
+          } else {
+            const { data: recentBookings } = await supabaseAdmin
+              .from('bookings')
+              .select('id')
+              .limit(1000);
+            matchedBookingIds = (recentBookings || [])
+              .map((b: any) => b.id)
+              .filter((id: string) => id.toLowerCase().includes(cleanSearch.toLowerCase()));
+          }
+        }
+
+        const candidateBookingIds = Array.from(new Set(matchedBookingIds));
+
+        if (matchedCustomerIds.length > 0 && candidateBookingIds.length > 0) {
+          query = query.or(`customer_id.in.(${matchedCustomerIds.join(',')}),id.in.(${candidateBookingIds.join(',')})`);
+        } else if (matchedCustomerIds.length > 0) {
+          query = query.in('customer_id', matchedCustomerIds);
+        } else if (candidateBookingIds.length > 0) {
+          query = query.in('id', candidateBookingIds);
+        } else {
+          return NextResponse.json({
+            bookings: [],
+            total: 0,
+            page,
+            totalPages: 0
+          });
+        }
       }
 
       const { data: bookings, count, error } = await query
@@ -892,10 +963,23 @@ export async function GET(
         const { data, error } = await supabaseAdmin
           .from('worker_bank_accounts')
           .select('*, workers(users(full_name, phone))')
+          .order('is_verified', { ascending: false })
+          .order('is_primary', { ascending: false })
           .order('created_at', { ascending: false });
         if (error) throw error;
+
+        // Deduplicate by worker_id so each partner appears once
+        const seenWorkerIds = new Set<string>();
+        const uniqueAccounts: any[] = [];
+        for (const account of data || []) {
+          if (!seenWorkerIds.has(account.worker_id)) {
+            seenWorkerIds.add(account.worker_id);
+            uniqueAccounts.push(account);
+          }
+        }
+
         const { decryptData } = await import('@/lib/crypto');
-        const decryptedData = (data || []).map((account: any) => {
+        const decryptedData = uniqueAccounts.map((account: any) => {
           let decryptedAccount = '';
           try {
             decryptedAccount = decryptData(account.account_number_encrypted);
@@ -1532,7 +1616,7 @@ export async function POST(
         if (isVerified) {
           await supabaseAdmin
             .from('worker_bank_accounts')
-            .update({ is_primary: false })
+            .delete()
             .eq('worker_id', account.worker_id)
             .neq('id', accountId);
 
@@ -1653,20 +1737,24 @@ export async function POST(
 
     // A.2 services/categories
     if (slug[0] === 'services' && slug[1] === 'categories' && slug.length === 2) {
-      const { data: { name, icon_url, sort_order }, errorResponse } = await validateBody(request, z.any());
+      const { data: { name, icon_url, sort_order, skills }, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
 
       if (!name) {
         return NextResponse.json({ error: 'Missing category name' }, { status: 400 });
       }
 
+      const formattedName = toTitleCase(name);
+      const formattedSkills = Array.isArray(skills) ? skills.map((s: string) => toTitleCase(s)) : [];
+
       const { data: newCategory, error } = await supabaseAdmin
         .from('service_categories')
         .insert({
-          name,
+          name: formattedName,
           icon_url: icon_url || null,
           sort_order: sort_order || 0,
-          is_active: true
+          is_active: true,
+          skills: formattedSkills
         })
         .select('*')
         .single();
@@ -1680,7 +1768,7 @@ export async function POST(
         action: AuditAction.SERVICE_CREATED,
         target_type: 'service_category',
         target_id: newCategory.id,
-        metadata: { category_name: name }
+        metadata: { category_name: formattedName }
       });
 
       return NextResponse.json(newCategory);
@@ -1691,6 +1779,13 @@ export async function POST(
       const categoryId = slug[2];
       const { data: updateFields, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
+
+      if (updateFields.name) {
+        updateFields.name = toTitleCase(updateFields.name);
+      }
+      if (Array.isArray(updateFields.skills)) {
+        updateFields.skills = updateFields.skills.map((s: string) => toTitleCase(s));
+      }
 
       const { data: updatedCategory, error } = await supabaseAdmin
         .from('service_categories')
@@ -1724,22 +1819,26 @@ export async function POST(
     // A. services
 
     if (slug[0] === 'services' && slug.length === 1) {
-      const { data: { category_id, name, description, base_price, estimated_mins, icon_url }, errorResponse } = await validateBody(request, z.any());
+      const { data: { category_id, name, description, base_price, estimated_mins, icon_url, skill_tag }, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
 
       if (!category_id || !name || !base_price) {
         return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
       }
 
+      const formattedName = toTitleCase(name);
+      const formattedSkillTag = skill_tag ? toTitleCase(skill_tag) : null;
+
       const { data: newService, error } = await supabaseAdmin
         .from('service_items')
         .insert({
           category_id,
-          name,
+          name: formattedName,
           description,
           base_price,
           estimated_mins: estimated_mins || 60,
           icon_url: icon_url || null,
+          skill_tag: formattedSkillTag,
           is_active: true
         })
         .select('*')
@@ -1755,11 +1854,12 @@ export async function POST(
         action: AuditAction.SERVICE_CREATED,
         target_type: 'service',
         target_id: newService.id,
-        metadata: { service_name: name, base_price }
+        metadata: { service_name: formattedName, base_price }
       });
 
       return NextResponse.json({ success: true, service: newService });
     }
+
 
     // B. manual-assignment
     if (slug[0] === 'manual-assignment' && slug.length === 1) {
@@ -1924,6 +2024,7 @@ export async function POST(
       if (action === 'APPROVE') {
         const { createWallet } = await import('@/lib/wallet-engine');
         await createWallet(workerId);
+        // Note: Sign-in bonus deposits to Captain wallet after completing required orders configured in Admin Referral Rules
       }
 
       // Update overall kyc checklist and remarks in worker_kyc table
@@ -1958,7 +2059,13 @@ export async function POST(
           aadhaar: ['AADHAAR_FRONT', 'AADHAAR_BACK'],
           pan: ['PAN_CARD'],
           selfie: ['SELFIE_VERIFICATION'],
-          certificate: ['EXPERIENCE_CERTIFICATE', 'CERTIFICATE']
+          certificate: [
+            'EXPERIENCE_CERTIFICATE',
+            'CERTIFICATE',
+            'EXPERIENCE_CERTIFICATE_1',
+            'EXPERIENCE_CERTIFICATE_2',
+            'EXPERIENCE_CERTIFICATE_3'
+          ]
         };
 
         for (const [field, types] of Object.entries(docTypes)) {
@@ -1971,6 +2078,22 @@ export async function POST(
               .in('document_type', types);
           }
         }
+      } else if (action === 'APPROVE') {
+        // Auto-approve all documents when approving KYC
+        await supabaseAdmin
+          .from('worker_kyc')
+          .update({
+            aadhaar_status: 'APPROVED',
+            pan_status: 'APPROVED',
+            selfie_status: 'APPROVED',
+            certificate_status: 'APPROVED'
+          })
+          .eq('worker_id', workerId);
+
+        await supabaseAdmin
+          .from('worker_documents')
+          .update({ status: 'APPROVED' })
+          .eq('worker_id', workerId);
       }
 
       // Dispatch alert notification
@@ -1982,6 +2105,36 @@ export async function POST(
           ? 'Congratulations! Your profile KYC registration is approved.'
           : `KYC Review Update. Remarks: ${reason || 'Document verification updated.'}`
       });
+
+      // Dispatch email notification to worker
+      try {
+        const { data: workerUser } = await supabaseAdmin
+          .from('workers')
+          .select('id, users(email, full_name)')
+          .eq('id', workerId)
+          .single();
+
+        const workerEmail = (workerUser as any)?.users?.email;
+        const workerName = (workerUser as any)?.users?.full_name || 'Captain';
+
+        if (workerEmail) {
+          if (action === 'APPROVE') {
+            await sendKycApprovedEmail({
+              workerEmail,
+              workerName,
+              workerId,
+            }).catch(e => console.error('[Email] KYC Approve error:', e?.message));
+          } else {
+            await sendKycRejectedEmail({
+              workerEmail,
+              workerName,
+              remarks: reason || 'Document verification updated.',
+            }).catch(e => console.error('[Email] KYC Reject error:', e?.message));
+          }
+        }
+      } catch (emailErr) {
+        console.error('Failed to dispatch KYC decision email:', emailErr);
+      }
 
       // Write Audit Log
       await logAuditAction({
@@ -2017,29 +2170,65 @@ export async function POST(
         );
       }
 
-      const { error: updateErr } = await supabaseAdmin
-        .from('workers')
-        .update({ kyc_status: 'APPROVED' })
-        .eq('id', workerId);
+      if (worker.kyc_status === 'APPROVED' && kycSync.portal_status !== 'APPROVED') {
+        // Sync portal status and all documents to APPROVED
+        await supabaseAdmin
+          .from('worker_kyc')
+          .update({
+            overall_status: 'APPROVED',
+            aadhaar_status: 'APPROVED',
+            pan_status: 'APPROVED',
+            selfie_status: 'APPROVED',
+            certificate_status: 'APPROVED',
+            reviewed_by: session.user_id,
+            reviewed_at: new Date().toISOString()
+          })
+          .eq('worker_id', workerId);
 
-      if (updateErr) throw updateErr;
+        await supabaseAdmin
+          .from('worker_documents')
+          .update({ status: 'APPROVED' })
+          .eq('worker_id', workerId);
 
-      const { createWallet } = await import('@/lib/wallet-engine');
-      await createWallet(workerId);
+        await logAuditAction({
+          admin_id: session.user_id,
+          action: AuditAction.WORKER_KYC_APPROVED,
+          target_type: 'worker',
+          target_id: workerId,
+          metadata: {
+            action: 'SYNC_TO_WORKER_KYC',
+            previous_portal_status: kycSync.portal_status,
+            reviewed_at: new Date().toISOString(),
+          }
+        });
 
-      await logAuditAction({
-        admin_id: session.user_id,
-        action: AuditAction.WORKER_KYC_APPROVED,
-        target_type: 'worker',
-        target_id: workerId,
-        metadata: {
-          action: 'SYNC_FROM_WORKER_KYC',
-          previous_status: worker.kyc_status,
-          reviewed_at: kycSync.reviewed_at,
-        }
-      });
+        return NextResponse.json({ success: true, kyc_status: 'APPROVED', portal_status: 'APPROVED' });
+      } else {
+        const { error: updateErr } = await supabaseAdmin
+          .from('workers')
+          .update({ kyc_status: 'APPROVED' })
+          .eq('id', workerId);
 
-      return NextResponse.json({ success: true, kyc_status: 'APPROVED' });
+        if (updateErr) throw updateErr;
+
+        const { createWallet } = await import('@/lib/wallet-engine');
+        await createWallet(workerId);
+        // Note: Sign-in bonus deposits to Captain wallet after completing required orders configured in Admin Referral Rules
+
+        await logAuditAction({
+          admin_id: session.user_id,
+          action: AuditAction.WORKER_KYC_APPROVED,
+          target_type: 'worker',
+          target_id: workerId,
+          metadata: {
+            action: 'SYNC_FROM_WORKER_KYC',
+            previous_status: worker.kyc_status,
+            reviewed_at: kycSync.reviewed_at,
+          }
+        });
+
+        return NextResponse.json({ success: true, kyc_status: 'APPROVED' });
+      }
     }
 
     // D.2 workers/[id]/status
@@ -2171,6 +2360,13 @@ export async function POST(
       const { data: updateFields, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
 
+      if (updateFields.name) {
+        updateFields.name = toTitleCase(updateFields.name);
+      }
+      if (updateFields.skill_tag) {
+        updateFields.skill_tag = toTitleCase(updateFields.skill_tag);
+      }
+
       const { data: updatedService, error } = await supabaseAdmin
         .from('service_items')
         .update(updateFields)
@@ -2198,6 +2394,11 @@ export async function POST(
     if (slug[0] === 'settings' && slug.length === 1) {
       const { data: settingsPayload, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
+
+      // Ensure late cancellation fee operation is strictly disabled across the platform
+      if (settingsPayload.customer_cancellation_travel_fee !== undefined) {
+        settingsPayload.customer_cancellation_travel_fee = '0';
+      }
 
       // Get old settings values first for audit logs comparison
       const { data: oldSettings } = await supabaseAdmin.from('platform_settings').select('*');
@@ -2232,6 +2433,40 @@ export async function POST(
       });
 
       return NextResponse.json({ success: true, settings: settingsPayload });
+    }
+
+    // G.1.5 customers/[id] - Edit Customer Details or Status
+    if (slug[0] === 'customers' && slug.length === 2) {
+      const customerId = slug[1];
+      const { data: body, errorResponse } = await validateBody(request, z.any());
+      if (errorResponse) return errorResponse;
+
+      const updateData: any = {};
+      if (body.full_name !== undefined) updateData.full_name = body.full_name;
+      if (body.email !== undefined) updateData.email = body.email;
+      if (body.phone !== undefined) updateData.phone = body.phone;
+      if (body.is_active !== undefined) updateData.is_active = Boolean(body.is_active);
+
+      const { data: updatedUser, error } = await supabaseAdmin
+        .from('users')
+        .update(updateData)
+        .eq('id', customerId)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+
+      if (updateData.is_active !== undefined) {
+        await logAuditAction({
+          admin_id: session.user_id,
+          action: updateData.is_active ? AuditAction.CUSTOMER_ACTIVATED : AuditAction.CUSTOMER_DEACTIVATED,
+          target_type: 'customer',
+          target_id: customerId,
+          metadata: { updated_fields: Object.keys(updateData) }
+        });
+      }
+
+      return NextResponse.json({ success: true, customer: updatedUser, user: updatedUser });
     }
 
     // G.2 customers/[id]/status
@@ -2300,24 +2535,43 @@ export async function POST(
       }
 
       if (action === 'APPROVE_PURGE') {
-        if (reqItem.user_id) {
+        let targetUserId = reqItem.user_id;
+        if (!targetUserId && reqItem.phone) {
+          const { data: u } = await supabaseAdmin
+            .from('users')
+            .select('id')
+            .eq('phone', reqItem.phone)
+            .maybeSingle();
+          if (u) targetUserId = u.id;
+        }
+
+        if (targetUserId) {
           await supabaseAdmin
             .from('users')
             .update({
-              full_name: 'Deleted User',
+              full_name: 'Deactivated User',
               email: null,
-              phone: `+910000000000_deleted_${reqItem.user_id.slice(0, 8)}`,
+              phone: `+910000000000_deleted_${targetUserId.slice(0, 8)}`,
               avatar_url: null,
               is_active: false,
               is_suspended: true,
             })
-            .eq('id', reqItem.user_id);
+            .eq('id', targetUserId);
+
+          try {
+            await supabaseAdmin
+              .from('workers')
+              .update({ status: 'OFFLINE', is_available: false })
+              .eq('id', targetUserId);
+          } catch (e) {
+            // ignore if table not present
+          }
 
           try {
             await supabaseAdmin
               .from('customer_addresses')
               .delete()
-              .eq('customer_id', reqItem.user_id);
+              .eq('customer_id', targetUserId);
           } catch (e) {
             // ignore if table not present
           }
@@ -2326,11 +2580,12 @@ export async function POST(
             await supabaseAdmin
               .from('fcm_tokens')
               .delete()
-              .eq('user_id', reqItem.user_id);
+              .eq('user_id', targetUserId);
           } catch (e) {
             // ignore if table not present
           }
         }
+
 
         await supabaseAdmin
           .from('account_deletion_requests')

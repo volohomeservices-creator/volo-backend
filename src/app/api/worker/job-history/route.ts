@@ -29,10 +29,12 @@ export async function GET(request: Request) {
     }
 
     if (dateFrom) {
-      query = query.gte('created_at', dateFrom);
+      const fromIso = dateFrom.includes('T') ? dateFrom : `${dateFrom}T00:00:00.000Z`;
+      query = query.gte('created_at', fromIso);
     }
     if (dateTo) {
-      query = query.lte('created_at', dateTo);
+      const toIso = dateTo.includes('T') ? dateTo : `${dateTo}T23:59:59.999Z`;
+      query = query.lte('created_at', toIso);
     }
 
     // Search query on service name
@@ -56,6 +58,7 @@ export async function GET(request: Request) {
     }));
 
     return NextResponse.json({
+      jobs: history,
       history,
       total: count || 0,
       page,

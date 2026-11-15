@@ -211,6 +211,7 @@ export async function PATCH(
 
       updates.status = 'CANCELLED';
 
+      // Late cancellation fee operations are disabled across the platform (0 fee deducted, 100% full refund)
       if (booking.payment_mode === 'ONLINE' || booking.payment_mode === 'WALLET') {
         shouldRefund = true;
         refundAmount = Number(booking.total_amount);

@@ -15,12 +15,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid JSON request body.' }, { status: 400 });
     }
 
-    const { serviceAmount, serviceId, categoryId, configOverride } = body;
+    const { serviceAmount, serviceId, categoryId, itemCount, configOverride } = body;
 
     const breakdown = await calculateCustomerCharges({
       serviceAmount: Number(serviceAmount || 0),
       serviceId,
       categoryId,
+      itemCount: Number(itemCount || 1),
       configOverride,
     });
 
@@ -40,10 +41,13 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const amountParam = url.searchParams.get('amount') || url.searchParams.get('serviceAmount') || '0';
+    const countParam = url.searchParams.get('itemCount') || url.searchParams.get('count') || '1';
     const serviceAmount = Math.max(0, parseFloat(amountParam));
+    const itemCount = Math.max(1, parseInt(countParam, 10));
 
     const breakdown = await calculateCustomerCharges({
       serviceAmount,
+      itemCount,
     });
 
     return NextResponse.json(breakdown, {

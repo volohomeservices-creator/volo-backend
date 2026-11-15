@@ -25,7 +25,8 @@
     ],
     "paths": {
       "@/lib/*": [
-        "./packages/shared-lib/src/lib/*"
+        "./packages/shared-lib/src/lib/*",
+        "./src/lib/*"
       ],
       "@/types": [
         "./packages/shared-lib/src/types"

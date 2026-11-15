@@ -8,13 +8,14 @@ import { dispatchNotification } from '@/lib/notification-dispatcher';
 import { createOnlinePayment } from '@/lib/payment-service';
 import { getBookingSlug } from '@/lib/booking-slug';
 import { calculateCustomerCharges } from '@/lib/pricing-engine';
+import { isLocationInWarangal } from '@/lib/warangal-geofence';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   try {
     const session = await requireRole(request, 'customer');
-    if (!session) {
+    if (!session || !session.user_id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const customerId = session.user_id;
@@ -42,7 +43,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const session = await requireRole(request, 'customer');
-    if (!session) {
+    if (!session || !session.user_id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const customerId = session.user_id;
@@ -69,6 +70,19 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing required booking fields.' }, { status: 400 });
     }
 
+    // Verify service delivery location is strictly within Warangal operational zone
+    const bookingLat = Number(latitude);
+    const bookingLng = Number(longitude);
+    if (!isLocationInWarangal(bookingLat, bookingLng)) {
+      return NextResponse.json(
+        {
+          error: 'OUT_OF_SERVICE_AREA',
+          message: 'VOLO Home Services is currently operational exclusively in Warangal district. We will be coming to your location soon!'
+        },
+        { status: 422 }
+      );
+    }
+
     // 1. Fetch service item to get base price
     const { data: item, error: itemErr } = await supabaseAdmin
       .from('service_items')
@@ -80,11 +94,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Service item not found.' }, { status: 404 });
     }
 
+    const itemCount = Number(body.item_count || 1);
+
     // 2. Calculate authoritative pricing breakdown via central Pricing Engine
     const pricingBreakdown = await calculateCustomerCharges({
       serviceAmount: Number(item.base_price),
       serviceId: item.id,
       categoryId: item.category_id,
+      itemCount,
     });
 
     const basePrice = pricingBreakdown.serviceAmount;
@@ -366,11 +383,25 @@ export async function POST(request: Request) {
 
     // Online bookings stay undispatched until Razorpay confirms the payment.
     if (payment_mode !== 'ONLINE') {
+      const isScheduled = !!(scheduled_at && new Date(scheduled_at) > new Date());
+      const formattedDate = isScheduled
+        ? new Date(scheduled_at).toLocaleDateString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+        : '';
+
       await dispatchNotification({
         userId: customerId,
         type: 'BOOKING_CREATED',
-        title: 'Booking Confirmed',
-        body: `Your service request for ${item.name} is successfully registered.`
+        title: isScheduled ? '📅 Scheduled Booking Confirmed' : 'Booking Confirmed',
+        body: isScheduled
+          ? `Your service request for ${item.name} is scheduled for ${formattedDate}. Certified captain matching is underway.`
+          : `Your service request for ${item.name} is successfully registered. Matching nearby certified captains.`,
+        data: { booking_id: booking.id, is_scheduled: isScheduled }
       });
 
       startAssignment(booking.id).catch(err => {

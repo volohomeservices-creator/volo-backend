@@ -38,41 +38,65 @@ export async function POST(request: Request) {
 
     const userId = user?.id || null;
 
-    // Record deletion request in account_deletion_requests (if table exists)
-    try {
-      await supabaseAdmin
-        .from('account_deletion_requests')
-        .insert({
-          user_id: userId,
-          phone: formattedPhone,
-          role: user?.role || role,
-          reason: typeof reason === 'string' ? reason.trim().slice(0, 1000) : '',
-          requested_via: requested_via === 'APP' ? 'APP' : 'WEB',
-          status: 'PENDING',
-        });
-    } catch (insertErr) {
-      console.warn('[Account Deletion] Table insert warning (fallback):', insertErr);
-    }
+    // Check if there is already a PENDING request
+    const { data: existingReq } = await supabaseAdmin
+      .from('account_deletion_requests')
+      .select('id, status')
+      .or(`phone.eq.${formattedPhone}${userId ? `,user_id.eq.${userId}` : ''}`)
+      .eq('status', 'PENDING')
+      .maybeSingle();
 
-    // Immediately soft-deactivate user account if found
-    if (userId) {
-      await supabaseAdmin
-        .from('users')
-        .update({ is_active: false })
-        .eq('id', userId);
+    let newReqId = existingReq?.id;
 
-      if (user?.role === 'worker' || role === 'worker') {
-        await supabaseAdmin
-          .from('workers')
-          .update({ status: 'OFFLINE' })
-          .eq('id', userId);
+    if (!existingReq) {
+      // Record deletion request in account_deletion_requests
+      try {
+        const { data: inserted } = await supabaseAdmin
+          .from('account_deletion_requests')
+          .insert({
+            user_id: userId,
+            phone: formattedPhone,
+            role: user?.role || role,
+            reason: typeof reason === 'string' ? reason.trim().slice(0, 1000) : '',
+            requested_via: requested_via === 'APP' ? 'APP' : 'WEB',
+            status: 'PENDING',
+          })
+          .select('id')
+          .single();
+        newReqId = inserted?.id;
+      } catch (insertErr) {
+        console.warn('[Account Deletion] Table insert warning (fallback):', insertErr);
       }
     }
 
+    // Alert all admins via notifications
+    try {
+      const { data: admins } = await supabaseAdmin
+        .from('users')
+        .select('id')
+        .eq('role', 'admin');
+
+      if (admins && admins.length > 0) {
+        const displayName = user?.full_name || formattedPhone;
+        const notifInserts = admins.map((admin: any) => ({
+          user_id: admin.id,
+          type: 'ADMIN_BROADCAST',
+          title: '⚠️ Account Deactivation Request',
+          body: `User ${displayName} (${user?.role || role}) requested account deactivation. Pending admin approval.`,
+          data: { type: 'ACCOUNT_DELETION_REQUEST', requestId: newReqId, phone: formattedPhone, role: user?.role || role }
+        }));
+        await supabaseAdmin.from('notifications').insert(notifInserts);
+      }
+    } catch (notifErr) {
+      console.warn('Failed to notify admins of deactivation request:', notifErr);
+    }
+
+    // Account remains active until explicit admin approval!
     return NextResponse.json(
       {
         success: true,
-        message: 'Your account deletion request has been successfully submitted. Your account is now deactivated, and your personal data will be permanently purged within 30 days in accordance with data protection policies.',
+        pending: true,
+        message: 'Your account deactivation request has been successfully submitted to the admin team for review. Your account will remain active until approved by an administrator.',
       },
       { status: 200, headers: cacheHeaders }
     );

@@ -26,11 +26,14 @@ export interface CustomerPricingInput {
   serviceAmount: number;
   serviceId?: string | null;
   categoryId?: string | null;
+  itemCount?: number;
   configOverride?: Partial<PlatformFeeSetting>;
 }
 
 export interface CustomerPricingBreakdown {
   serviceAmount: number;
+  comboDiscount: number;
+  comboDiscountLabel: string;
   platformFee: number;
   platformFeeLabel: string;
   platformFeeEnabled: boolean;
@@ -135,6 +138,21 @@ export async function calculateCustomerCharges(
 ): Promise<CustomerPricingBreakdown> {
   const serviceAmt = Math.max(0, Math.round(Number(input.serviceAmount || 0) * 100) / 100);
 
+  // 0. Multi-Service Combo Combination Discount (Applied when 2 or more services are booked together)
+  let comboDiscount = 0;
+  let comboDiscountLabel = '';
+  const count = Number(input.itemCount || 1);
+  if (count >= 2 && serviceAmt > 0) {
+    // 10% Combo savings on multi-service orders (min ₹49, max ₹250)
+    comboDiscount = Math.round(Math.min(250, Math.max(49, serviceAmt * 0.10)) * 100) / 100;
+    if (comboDiscount > serviceAmt * 0.35) {
+      comboDiscount = Math.round((serviceAmt * 0.15) * 100) / 100;
+    }
+    comboDiscountLabel = `Combo Savings (${count} Services)`;
+  }
+
+  const discountedServiceAmt = Math.max(0, serviceAmt - comboDiscount);
+
   // Use provided override (for Admin preview / unit tests) or load authoritative DB config
   const activeConfig = (input.configOverride && input.configOverride.calculation_type && input.configOverride.enabled !== undefined)
     ? (input.configOverride as PlatformFeeSetting)
@@ -153,7 +171,7 @@ export async function calculateCustomerCharges(
   if (isEnabled) {
     if (activeConfig.calculation_type === 'PERCENTAGE') {
       const pct = Math.max(0, Math.min(100, Number(activeConfig.percentage || 0)));
-      platformFee = Math.round(((serviceAmt * pct) / 100) * 100) / 100;
+      platformFee = Math.round(((discountedServiceAmt * pct) / 100) * 100) / 100;
       platformFeeLabel = `Platform Fee (${pct}%)`;
     } else {
       platformFee = Math.max(0, Math.round(Number(activeConfig.fixed_amount || 0) * 100) / 100);
@@ -179,7 +197,7 @@ export async function calculateCustomerCharges(
   const isGstEnabled = activeConfig.gst_enabled !== false;
   const gstCalcType = activeConfig.gst_calculation_type || 'PERCENTAGE';
   const gstPercentage = activeConfig.gst_percentage !== null ? Number(activeConfig.gst_percentage) : 5;
-  const taxableAmount = serviceAmt;
+  const taxableAmount = discountedServiceAmt;
 
   if (isGstEnabled) {
     if (gstCalcType === 'PERCENTAGE') {
@@ -205,10 +223,12 @@ export async function calculateCustomerCharges(
   taxAmount = Math.max(0, Math.round(taxAmount * 100) / 100);
 
   // 3. Authoritative Grand Total
-  const totalAmount = Math.round((serviceAmt + platformFee + taxAmount) * 100) / 100;
+  const totalAmount = Math.round((discountedServiceAmt + platformFee + taxAmount) * 100) / 100;
 
   return {
     serviceAmount: serviceAmt,
+    comboDiscount,
+    comboDiscountLabel,
     platformFee,
     platformFeeLabel,
     platformFeeEnabled: isEnabled,

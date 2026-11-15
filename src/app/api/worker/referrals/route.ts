@@ -57,10 +57,20 @@ export async function GET(request: Request) {
     // 3. Get reward settings
     const { data: settings } = await supabaseAdmin
       .from('referral_settings')
-      .select('referrer_reward, referee_reward, min_bookings_to_qualify')
+      .select('referrer_reward, referee_reward, min_bookings_to_qualify, min_referrer_bookings')
       .eq('role', 'worker')
       .eq('active', true)
-      .single();
+      .maybeSingle();
+
+    // 4. Check worker's completed jobs to determine eligibility
+    const { count: completedJobs } = await supabaseAdmin
+      .from('bookings')
+      .select('id', { count: 'exact', head: true })
+      .eq('worker_id', userId)
+      .eq('status', 'COMPLETED');
+
+    const minReferrerJobs = settings?.min_referrer_bookings ?? 1;
+    const isEligible = (completedJobs || 0) >= minReferrerJobs;
 
     return NextResponse.json({
       code: codeRow?.referral_code || null,
@@ -71,7 +81,12 @@ export async function GET(request: Request) {
         totalEarned,
         pendingAmount,
       },
-      settings: settings || { referrer_reward: 500, referee_reward: 0, min_bookings_to_qualify: 5 },
+      eligibility: {
+        isEligible,
+        completedJobs: completedJobs || 0,
+        minReferrerJobs,
+      },
+      settings: settings || { referrer_reward: 100, referee_reward: 100, min_bookings_to_qualify: 5, min_referrer_bookings: 1 },
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: error.status || 500 });

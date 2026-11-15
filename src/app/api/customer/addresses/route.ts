@@ -3,6 +3,7 @@ import { validateBody } from '@/lib/zod-validator';
 import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth';
 import { supabaseAdmin } from '@/lib/supabase-server';
+import { isLocationInWarangal, WARANGAL_CENTER } from '@/lib/warangal-geofence';
 
 export async function GET(request: Request) {
   try {
@@ -45,16 +46,30 @@ export async function POST(request: Request) {
     const rawLabel = (label || 'HOME').trim().toUpperCase();
     const finalLabel = ['HOME', 'WORK', 'OTHER'].includes(rawLabel) ? rawLabel : 'OTHER';
 
-    let lat = Number(latitude || 12.9716);
-    let lng = Number(longitude || 77.5946);
+    let lat = Number(latitude);
+    let lng = Number(longitude);
 
-    // If coordinates are the default Bangalore coordinates, try to geocode the address string
-    if (lat === 12.9716 && lng === 77.5946) {
+    // If coordinates are not provided, geocode the address string
+    if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
       const geocodeResult = await geocodeAddress(address);
       if (geocodeResult) {
         lat = geocodeResult.lat;
         lng = geocodeResult.lng;
+      } else {
+        lat = WARANGAL_CENTER.lat;
+        lng = WARANGAL_CENTER.lng;
       }
+    }
+
+    // Verify address is strictly located within Warangal operational district
+    if (!isLocationInWarangal(lat, lng)) {
+      return NextResponse.json(
+        {
+          error: 'OUT_OF_SERVICE_AREA',
+          message: 'VOLO Home Services is currently operational exclusively in Warangal district. Addresses outside Warangal cannot be serviced at this time.'
+        },
+        { status: 422 }
+      );
     }
 
     let finalIsDefault = !!is_default;

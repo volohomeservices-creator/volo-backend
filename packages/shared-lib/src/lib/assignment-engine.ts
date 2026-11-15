@@ -49,7 +49,8 @@ export async function startAssignment(bookingId: string): Promise<string> {
       payment_mode,
       service_item_id,
       service_items (
-        category_id
+        category_id,
+        skill_tag
       )
     `)
     .eq('id', bookingId)
@@ -64,6 +65,7 @@ export async function startAssignment(bookingId: string): Promise<string> {
   }
 
   const categoryId = (booking as any).service_items?.category_id || null;
+  const skillTag = (booking as any).service_items?.skill_tag || null;
 
   // 2. Get search radius from platform_settings
   const { data: radiusData } = await supabaseAdmin
@@ -82,7 +84,8 @@ export async function startAssignment(bookingId: string): Promise<string> {
       p_radius_km: radiusKm,
       p_service_category_id: categoryId,
       p_booking_id: bookingId,
-      p_payment_mode: booking.payment_mode
+      p_payment_mode: booking.payment_mode,
+      p_skill_tag: skillTag
     }
   );
 
@@ -260,7 +263,7 @@ export async function advanceAssignment(queueId: string): Promise<string> {
   // 3. Verify linked booking is still PENDING_ASSIGNMENT
   const { data: booking, error: bookingErr } = await supabaseAdmin
     .from('bookings')
-    .select('status, lat, lng, payment_mode, service_items(category_id)')
+    .select('status, lat, lng, payment_mode, service_items(category_id, skill_tag)')
     .eq('id', queue.booking_id)
     .single();
 
@@ -294,6 +297,7 @@ export async function advanceAssignment(queueId: string): Promise<string> {
       .single();
     const radiusKm = radiusData ? parseFloat(radiusData.value) : 10;
     const categoryId = (booking as any).service_items?.category_id || null;
+    const skillTag = (booking as any).service_items?.skill_tag || null;
 
     // Query nearby eligible workers again
     const { data: workers } = await supabaseAdmin.rpc(
@@ -304,7 +308,8 @@ export async function advanceAssignment(queueId: string): Promise<string> {
         p_radius_km: radiusKm,
         p_service_category_id: categoryId,
         p_booking_id: queue.booking_id,
-        p_payment_mode: booking.payment_mode
+        p_payment_mode: booking.payment_mode,
+        p_skill_tag: skillTag
       }
     );
 

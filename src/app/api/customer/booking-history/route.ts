@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: Request) {
   try {
     const session = await requireRole(request, 'customer');
-    if (!session) {
+    if (!session || !session.user_id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const customerId = session.user_id;

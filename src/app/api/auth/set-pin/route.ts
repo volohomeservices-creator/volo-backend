@@ -63,7 +63,27 @@ export async function POST(request: Request) {
     // Log security audit event
     await logAuthEvent(session.user_id, session.firebase_uid, 'pin_set', null, request);
 
-    return NextResponse.json({ success: true }, { headers: cacheHeaders });
+    // Calculate proper redirection destination
+    let redirectTo = '/';
+    if (session.role === 'worker') {
+      const { data: worker } = await supabaseAdmin
+        .from('workers')
+        .select('kyc_status')
+        .eq('id', session.user_id)
+        .maybeSingle();
+      redirectTo = worker?.kyc_status === 'APPROVED' ? '/worker/dashboard' : '/worker/kyc';
+    } else if (session.role === 'customer') {
+      const { data: user } = await supabaseAdmin
+        .from('users')
+        .select('full_name')
+        .eq('id', session.user_id)
+        .maybeSingle();
+      redirectTo = user?.full_name ? '/customer/dashboard' : '/customer/onboarding';
+    } else if (session.role === 'admin') {
+      redirectTo = '/admin/dashboard';
+    }
+
+    return NextResponse.json({ success: true, redirectTo }, { headers: cacheHeaders });
 
   } catch (err) {
     console.error('[Set PIN] Unexpected error:', err);

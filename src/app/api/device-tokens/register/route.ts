@@ -21,7 +21,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Device token is required' }, { status: 400 });
     }
 
-    // Upsert device token
+    // 1. Deactivate this physical device token for any other accounts previously logged in on this device
+    await supabaseAdmin
+      .from('user_devices')
+      .update({ is_active: false })
+      .eq('device_token', deviceToken)
+      .neq('user_id', userId);
+
+    // 2. Upsert device token for current user
     const { error: upsertErr } = await supabaseAdmin
       .from('user_devices')
       .upsert({

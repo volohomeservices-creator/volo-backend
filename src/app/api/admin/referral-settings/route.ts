@@ -28,22 +28,25 @@ export async function PUT(request: Request) {
     const session = await requireRole(request, 'admin');
     const { data: body, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
-    const { role, referrer_reward, referee_reward, min_bookings_to_qualify, active } = body;
+    const { role, referrer_reward, referee_reward, min_bookings_to_qualify, min_referrer_bookings, active } = body;
 
     if (!role || !['customer', 'worker'].includes(role)) {
       return NextResponse.json({ error: 'Invalid role' }, { status: 400 });
     }
 
+    const updatePayload: Record<string, any> = {
+      referrer_reward: Number(referrer_reward),
+      referee_reward: Number(referee_reward),
+      min_bookings_to_qualify: Number(min_bookings_to_qualify ?? 1),
+      min_referrer_bookings: Number(min_referrer_bookings ?? 1),
+      active: Boolean(active),
+      updated_at: new Date().toISOString(),
+      updated_by: session.user_id,
+    };
+
     const { data, error } = await supabaseAdmin
       .from('referral_settings')
-      .update({
-        referrer_reward: Number(referrer_reward),
-        referee_reward: Number(referee_reward),
-        min_bookings_to_qualify: Number(min_bookings_to_qualify),
-        active: Boolean(active),
-        updated_at: new Date().toISOString(),
-        updated_by: session.user_id,
-      })
+      .update(updatePayload)
       .eq('role', role)
       .select()
       .single();

@@ -8,7 +8,7 @@ import { serialize } from 'cookie';
 
 export async function POST(request: Request) {
   try {
-    const { data: { idToken, role, ref_code }, errorResponse } = await validateBody(request, z.any());
+    const { data: { idToken, role, ref_code, first_name, last_name, email }, errorResponse } = await validateBody(request, z.any());
     if (errorResponse) return errorResponse;
 
     if (!idToken || !role) {
@@ -71,6 +71,9 @@ export async function POST(request: Request) {
     let current_full_name = '';
     let is_active = true;
 
+    const computedFullName = [first_name, last_name].filter(Boolean).join(' ').trim() || null;
+    const cleanEmail = email?.trim().toLowerCase() || null;
+
     if (fetchErr && fetchErr.code === 'PGRST116') {
       // User does not exist under this firebase_uid, attempt to insert
       const { data: newUser, error: insertErr } = await supabaseAdmin
@@ -79,6 +82,8 @@ export async function POST(request: Request) {
           firebase_uid,
           phone,
           role,
+          full_name: computedFullName,
+          email: cleanEmail,
           is_active: true
         })
         .select('*')
@@ -107,12 +112,16 @@ export async function POST(request: Request) {
           }
           user_id = userByPhone.id;
           is_active = userByPhone.is_active;
-          current_full_name = userByPhone.full_name || '';
+          current_full_name = userByPhone.full_name || computedFullName || '';
           isNewUser = false;
-          // Update firebase_uid on the existing user record
+          // Update firebase_uid and profile info on the existing user record
           await supabaseAdmin
             .from('users')
-            .update({ firebase_uid })
+            .update({
+              firebase_uid,
+              ...(computedFullName && !userByPhone.full_name ? { full_name: computedFullName } : {}),
+              ...(cleanEmail && !userByPhone.email ? { email: cleanEmail } : {}),
+            })
             .eq('id', user_id);
         } else {
           return NextResponse.json({ error: 'Failed to create user record', details: insertErr?.message }, { status: 500 });
@@ -121,6 +130,7 @@ export async function POST(request: Request) {
         isNewUser = true;
         user_id = newUser.id;
         is_active = newUser.is_active;
+        current_full_name = computedFullName || '';
       }
 
       // If worker, insert workers table + commission wallet
@@ -147,16 +157,19 @@ export async function POST(request: Request) {
             .select('user_id, role')
             .eq('referral_code', ref_code.trim().toUpperCase())
             .eq('active', true)
-            .single();
+            .maybeSingle();
 
           if (refCodeRow && refCodeRow.user_id !== user_id) {
             // Get the reward amount for this role
             const { data: settings } = await supabaseAdmin
               .from('referral_settings')
-              .select('referrer_reward')
+              .select('referrer_reward, referee_reward')
               .eq('role', refCodeRow.role)
               .eq('active', true)
-              .single();
+              .maybeSingle();
+
+            const referrerReward = Number(settings?.referrer_reward ?? (refCodeRow.role === 'customer' ? 100 : 100));
+            const refereeReward = Number(settings?.referee_reward ?? (refCodeRow.role === 'customer' ? 50 : 100));
 
             await supabaseAdmin
               .from('referrals')
@@ -166,7 +179,8 @@ export async function POST(request: Request) {
                 referral_code: ref_code.trim().toUpperCase(),
                 role: refCodeRow.role,
                 status: 'PENDING',
-                reward_amount: settings?.referrer_reward || 500,
+                reward_amount: referrerReward,
+                referee_reward_amount: refereeReward,
               });
           }
         } catch (refErr) {
@@ -177,7 +191,7 @@ export async function POST(request: Request) {
     } else if (existingUser) {
       user_id = existingUser.id;
       is_active = existingUser.is_active;
-      current_full_name = existingUser.full_name || '';
+      current_full_name = existingUser.full_name || computedFullName || '';
 
       // Check if role matches
       if (existingUser.role !== role) {
@@ -186,6 +200,17 @@ export async function POST(request: Request) {
           error: 'UNAUTHORIZED_ROLE',
           message: `This phone number is registered as a ${existingUser.role === 'customer' ? 'Customer' : 'Partner'}. Please switch to the ${registeredPortal}.`
         }, { status: 403 });
+      }
+
+      // If user provided name or email, update existing user record
+      if (computedFullName || cleanEmail) {
+        await supabaseAdmin
+          .from('users')
+          .update({
+            ...(computedFullName ? { full_name: computedFullName } : {}),
+            ...(cleanEmail ? { email: cleanEmail } : {})
+          })
+          .eq('id', user_id);
       }
     } else {
       return NextResponse.json({ error: 'Database verification error' }, { status: 500 });
@@ -199,14 +224,25 @@ export async function POST(request: Request) {
     // 4. Calculate Redirection
     let redirectTo = '';
     if (role === 'customer') {
-      redirectTo = isNewUser || !current_full_name ? '/customer/onboarding' : '/customer/dashboard';
+      redirectTo = !current_full_name ? '/customer/onboarding' : '/customer/dashboard';
     } else {
       // Worker
-      const { data: workerProfile } = await supabaseAdmin
+      let { data: workerProfile } = await supabaseAdmin
         .from('workers')
         .select('kyc_status')
         .eq('id', user_id)
-        .single();
+        .maybeSingle();
+
+      if (!workerProfile) {
+        await supabaseAdmin
+          .from('workers')
+          .insert({
+            id: user_id,
+            status: 'OFFLINE',
+            kyc_status: 'PENDING'
+          });
+        workerProfile = { kyc_status: 'PENDING' } as any;
+      }
 
       if (workerProfile?.kyc_status === 'REJECTED') {
         return NextResponse.json({ error: 'KYC_REJECTED' }, { status: 403 });
@@ -240,6 +276,7 @@ export async function POST(request: Request) {
         id: user_id,
         role,
         full_name: current_full_name,
+        email: cleanEmail || existingUser?.email || null,
         phone,
         avatar_url: existingUser?.avatar_url || null
       },
