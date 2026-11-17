@@ -240,10 +240,14 @@ export async function GET(
 
       let query = supabaseAdmin
         .from('workers')
-        .select('id, status, kyc_status, rating, total_jobs, created_at, location_updated_at, users!inner(full_name, phone), worker_wallets(balance)', { count: 'exact' });
+        .select('id, status, kyc_status, rating, total_jobs, created_at, location_updated_at, worker_id_code, service_category_ids, users!inner(full_name, phone), worker_wallets(balance), worker_profiles(skills)', { count: 'exact' });
 
       if (search) {
-        query = query.or(`full_name.ilike.%${search}%,phone.ilike.%${search}%`, { foreignTable: 'users' });
+        if (search.toUpperCase().startsWith('VT')) {
+          query = query.ilike('worker_id_code', `%${search}%`);
+        } else {
+          query = query.or(`full_name.ilike.%${search}%,phone.ilike.%${search}%`, { foreignTable: 'users' });
+        }
       }
       if (status) {
         query = query.eq('status', status);
@@ -287,6 +291,16 @@ export async function GET(
 
       const workerIds = (workers || []).map((w: any) => w.id);
       const portalKycById = new Map<string, string>();
+      const categoryMap = new Map<string, string>();
+
+      // Fetch all service categories for rapid label mapping
+      const { data: allCategories } = await supabaseAdmin
+        .from('service_categories')
+        .select('id, name');
+      for (const cat of allCategories || []) {
+        categoryMap.set(cat.id, cat.name);
+      }
+
       if (workerIds.length > 0) {
         const { data: kycRows } = await supabaseAdmin
           .from('worker_kyc')
@@ -298,20 +312,32 @@ export async function GET(
       }
 
       return NextResponse.json({
-        workers: (workers || []).map((w: any) => ({
-          id: w.id,
-          full_name: w.users?.full_name,
-          phone: w.users?.phone,
-          status: w.status,
-          kyc_status: w.kyc_status,
-          portal_kyc_status: portalKycById.get(w.id) || null,
-          kyc_mismatch: !!portalKycById.get(w.id) && portalKycById.get(w.id) !== w.kyc_status,
-          rating: w.rating,
-          total_jobs: w.total_jobs,
-          commission_wallet_balance: (Array.isArray(w.worker_wallets) ? w.worker_wallets[0]?.balance : w.worker_wallets?.balance) || 0,
-          created_at: w.created_at,
-          location_updated_at: w.location_updated_at
-        })),
+        workers: (workers || []).map((w: any) => {
+          const catNames = (w.service_category_ids || [])
+            .map((cid: string) => categoryMap.get(cid))
+            .filter(Boolean);
+          const skillsList = Array.isArray(w.worker_profiles)
+            ? w.worker_profiles[0]?.skills || []
+            : w.worker_profiles?.skills || [];
+
+          return {
+            id: w.id,
+            full_name: w.users?.full_name,
+            phone: w.users?.phone,
+            status: w.status,
+            kyc_status: w.kyc_status,
+            portal_kyc_status: portalKycById.get(w.id) || null,
+            kyc_mismatch: !!portalKycById.get(w.id) && portalKycById.get(w.id) !== w.kyc_status,
+            rating: w.rating,
+            total_jobs: w.total_jobs,
+            worker_id_code: w.worker_id_code || null,
+            service_categories: catNames,
+            skills: skillsList,
+            commission_wallet_balance: (Array.isArray(w.worker_wallets) ? w.worker_wallets[0]?.balance : w.worker_wallets?.balance) || 0,
+            created_at: w.created_at,
+            location_updated_at: w.location_updated_at
+          };
+        }),
         total: count || 0,
         page,
         totalPages: Math.ceil((count || 0) / limit)

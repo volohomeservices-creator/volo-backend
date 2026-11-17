@@ -31,7 +31,7 @@ export async function GET(request: Request) {
       notificationsRes,
       liveLocRes
     ] = await Promise.all([
-      supabaseAdmin.from('workers').select('status, kyc_status, current_lat, current_lng, rating').eq('id', workerId).single(),
+      supabaseAdmin.from('workers').select('status, kyc_status, current_lat, current_lng, rating, worker_id_code, service_category_ids, selfie_url').eq('id', workerId).single(),
       supabaseAdmin.from('worker_wallets').select('balance').eq('worker_id', workerId).maybeSingle(),
       supabaseAdmin.from('worker_profiles').select('address, city, state, skills, experience, languages, bio').eq('worker_id', workerId).maybeSingle(),
       supabaseAdmin.from('bookings').select('id, status, scheduled_at, created_at, completed_at, total_amount')
@@ -225,8 +225,14 @@ export async function GET(request: Request) {
       worker: {
         id: workerId,
         full_name: user?.full_name || '',
+        phone: user?.phone || '',
         rating: Number(worker.rating ?? 5.0),
+        worker_id_code: worker.worker_id_code || null,
+        service_category_ids: worker.service_category_ids || [],
+        selfie_url: worker.selfie_url || null,
+        skills: profileRes.data?.skills || []
       },
+      worker_id_code: worker.worker_id_code || null,
       stats: {
         today_earnings: Math.round(today_earnings),
         completed_today,

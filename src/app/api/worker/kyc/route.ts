@@ -6,6 +6,7 @@ import { supabaseAdmin } from '@/lib/supabase-server';
 import { ensureBucketsExist } from '@/lib/storage-setup';
 import { encryptBankAccount, decryptBankAccount } from '@/lib/settlement-engine';
 import { sendKycSubmissionAdminEmail, sendKycSubmissionWorkerAck } from '@/lib/email-service';
+import { generateCaptainUniqueId } from '@/lib/captain-id';
 
 export async function GET(request: Request) {
   const cacheHeaders = { 'Cache-Control': 'no-store, max-age=0, must-revalidate' };
@@ -381,49 +382,36 @@ export async function POST(request: Request) {
         updateData.dob = dob;
       }
 
-      // Generate worker_id_code if not already set
+      // Generate worker_id_code if not already set (format: VT{Trade}{1001})
       const { data: currentWorker } = await supabaseAdmin
         .from('workers')
-        .select('worker_id_code')
+        .select('worker_id_code, service_category_ids')
         .eq('id', workerId)
         .single();
       
-      if (!currentWorker?.worker_id_code && full_name && dob) {
-        let attempts = 0;
-        let isUnique = false;
-        const specialChars = ['@', '#', '$', '%', '&', '*', '!'];
-        const digits = '0123456789';
+      if (!currentWorker?.worker_id_code) {
+        // Fetch worker profile skills
+        const { data: wp } = await supabaseAdmin
+          .from('worker_profiles')
+          .select('skills')
+          .eq('worker_id', workerId)
+          .maybeSingle();
 
-        while (!isUnique && attempts < 100) {
-          let firstName = 'VOLO';
-          const parts = full_name.trim().split(/\s+/);
-          if (parts[0]) {
-            firstName = parts[0].toUpperCase().replace(/[^A-Z]/g, '');
-          }
-          firstName = (firstName + 'XXXX').slice(0, 4);
-
-          let dobYear = '1995';
-          const dobParts = dob.split('-');
-          if (dobParts[0] && dobParts[0].length === 4) {
-            dobYear = dobParts[0];
-          }
-
-          const char1 = specialChars[Math.floor(Math.random() * specialChars.length)];
-          const char2 = digits[Math.floor(Math.random() * digits.length)];
-          const candidateCode = `${firstName}${dobYear}${char1}${char2}`;
-
-          const { data: existing } = await supabaseAdmin
-            .from('workers')
-            .select('id')
-            .eq('worker_id_code', candidateCode)
-            .maybeSingle();
-
-          if (!existing) {
-            updateData.worker_id_code = candidateCode;
-            isUnique = true;
-          }
-          attempts++;
+        let categoryNames: string[] = [];
+        if (currentWorker?.service_category_ids && currentWorker.service_category_ids.length > 0) {
+          const { data: catRows } = await supabaseAdmin
+            .from('service_categories')
+            .select('name')
+            .in('id', currentWorker.service_category_ids);
+          categoryNames = (catRows || []).map((c: any) => c.name);
         }
+
+        const candidateCode = await generateCaptainUniqueId(
+          supabaseAdmin,
+          wp?.skills || [],
+          categoryNames
+        );
+        updateData.worker_id_code = candidateCode;
       }
 
       const { error: updateBankErr } = await supabaseAdmin

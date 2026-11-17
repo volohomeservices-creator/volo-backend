@@ -3,6 +3,7 @@ import { validateBody } from '@/lib/zod-validator';
 import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth';
 import { supabaseAdmin } from '@/lib/supabase-server';
+import { generateCaptainUniqueId } from '@/lib/captain-id';
 
 // helper to calculate profile completion
 function getCompletionPercentage(user: any, profile: any) {
@@ -40,11 +41,11 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404, headers: cacheHeaders });
     }
 
-    // Fetch workers details (dob, worker_id_code, kyc_status, rating, status)
+    // Fetch workers details (dob, worker_id_code, kyc_status, rating, status, service_category_ids, selfie_url)
     const [workerRes, reviewsRes] = await Promise.all([
       supabaseAdmin
         .from('workers')
-        .select('dob, worker_id_code, kyc_status, rating, status')
+        .select('dob, worker_id_code, kyc_status, rating, status, service_category_ids, selfie_url')
         .eq('id', workerId)
         .single(),
       supabaseAdmin
@@ -73,6 +74,25 @@ export async function GET(request: Request) {
       profile = newProfile || {};
     }
 
+    // Resolve service category names
+    let categoryNames: string[] = [];
+    if (worker?.service_category_ids && worker.service_category_ids.length > 0) {
+      const { data: catRows } = await supabaseAdmin
+        .from('service_categories')
+        .select('name')
+        .in('id', worker.service_category_ids);
+      categoryNames = (catRows || []).map((c: any) => c.name);
+    }
+
+    // Generate signed URL for selfie if present
+    let selfieSignedUrl = null;
+    if (worker?.selfie_url) {
+      const { data: signData } = await supabaseAdmin.storage
+        .from('kyc-docs')
+        .createSignedUrl(worker.selfie_url, 3600);
+      selfieSignedUrl = signData?.signedUrl || null;
+    }
+
     return NextResponse.json({
       full_name: user.full_name,
       phone: user.phone,
@@ -91,7 +111,11 @@ export async function GET(request: Request) {
       kyc_status: worker?.kyc_status || 'PENDING',
       status: worker?.status || 'OFFLINE',
       rating: Number(worker?.rating ?? 5.0),
-      reviews_count: reviewsCount
+      reviews_count: reviewsCount,
+      service_categories: categoryNames,
+      service_category_ids: worker?.service_category_ids || [],
+      selfie_url: selfieSignedUrl || worker?.selfie_url || null,
+      photo_url: selfieSignedUrl || user.avatar_url || null
     }, { headers: cacheHeaders });
   } catch (error: any) {
     console.error('Error fetching worker profile:', error.message || error);
@@ -147,49 +171,35 @@ export async function PATCH(request: Request) {
       const updateData: any = {};
       if (dob) updateData.dob = dob;
 
-      // Generate worker_id_code if not already set
+      // Generate worker_id_code if not already set (format: VT{Trade}{1001})
       const { data: currentWorker } = await supabaseAdmin
         .from('workers')
-        .select('worker_id_code')
+        .select('worker_id_code, service_category_ids')
         .eq('id', workerId)
         .single();
       
-      if (!currentWorker?.worker_id_code && full_name && dob) {
-        let attempts = 0;
-        let isUnique = false;
-        const specialChars = ['@', '#', '$', '%', '&', '*', '!'];
-        const digits = '0123456789';
+      if (!currentWorker?.worker_id_code) {
+        const { data: wp } = await supabaseAdmin
+          .from('worker_profiles')
+          .select('skills')
+          .eq('worker_id', workerId)
+          .maybeSingle();
 
-        while (!isUnique && attempts < 100) {
-          let firstName = 'VOLO';
-          const parts = full_name.trim().split(/\s+/);
-          if (parts[0]) {
-            firstName = parts[0].toUpperCase().replace(/[^A-Z]/g, '');
-          }
-          firstName = (firstName + 'XXXX').slice(0, 4);
-
-          let dobYear = '1995';
-          const dobParts = dob.split('-');
-          if (dobParts[0] && dobParts[0].length === 4) {
-            dobYear = dobParts[0];
-          }
-
-          const char1 = specialChars[Math.floor(Math.random() * specialChars.length)];
-          const char2 = digits[Math.floor(Math.random() * digits.length)];
-          const candidateCode = `${firstName}${dobYear}${char1}${char2}`;
-
-          const { data: existing } = await supabaseAdmin
-            .from('workers')
-            .select('id')
-            .eq('worker_id_code', candidateCode)
-            .maybeSingle();
-
-          if (!existing) {
-            updateData.worker_id_code = candidateCode;
-            isUnique = true;
-          }
-          attempts++;
+        let categoryNames: string[] = [];
+        if (currentWorker?.service_category_ids && currentWorker.service_category_ids.length > 0) {
+          const { data: catRows } = await supabaseAdmin
+            .from('service_categories')
+            .select('name')
+            .in('id', currentWorker.service_category_ids);
+          categoryNames = (catRows || []).map((c: any) => c.name);
         }
+
+        const candidateCode = await generateCaptainUniqueId(
+          supabaseAdmin,
+          wp?.skills || [],
+          categoryNames
+        );
+        updateData.worker_id_code = candidateCode;
       }
 
       if (Object.keys(updateData).length > 0) {
